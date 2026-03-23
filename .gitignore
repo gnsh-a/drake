@@ -1,3 +1,8 @@
+# Local plan/notes
+/plan/
+/test_scripts/output/
+*.pyc 
+
 # Common editor-specific files
 *.idea
 *.autosave
