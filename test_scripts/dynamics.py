@@ -7,6 +7,8 @@ State conventions (matching Drake's QuaternionFloatingMobilizer):
 
 Quaternion is scalar-first: [w, x, y, z].
 Angular velocity is in world frame.
+
+Author: Ganesh Arivoli <arivoli@wisc.edu>
 """
 
 import numpy as np

@@ -2,6 +2,8 @@
 Collision detection, contact frame, Jacobian, and contact property combination.
 
 Implements sphere-halfspace point contact matching Drake's exact algorithms.
+
+Author: Ganesh Arivoli <arivoli@wisc.edu>
 """
 
 import numpy as np

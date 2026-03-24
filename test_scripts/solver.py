@@ -4,6 +4,8 @@ SAP (Semi-Analytic Primal) contact solver.
 Implements the friction cone constraint with Newton iteration and exact line
 search, matching Drake's SapSolver + SapFrictionConeConstraint.
 
+Author: Ganesh Arivoli <arivoli@wisc.edu>
+
 Reference: Castro et al., 2021. "An unconstrained convex formulation of
 compliant contact." IEEE T-RO, 2022.
 """
@@ -107,6 +109,23 @@ def convergence_check(grad, A, v, J, gamma, abs_tol=1e-14, rel_tol=1e-6):
     return residual <= abs_tol + rel_tol * scale
 
 
+def compute_cost(v, v_star, A, gamma, R):
+    """SAP Lagrangian: momentum cost + regularizer cost."""
+    dv = v - v_star
+    ell_momentum = 0.5 * dv @ A @ dv
+    ell_regularizer = 0.5 * np.dot(gamma, R * gamma)
+    return ell_momentum + ell_regularizer
+
+
+def cost_convergence_check(ell_prev, ell_curr, alpha,
+                           abs_tol=1e-30, rel_tol=1e-15):
+    """Check SAP cost convergence (Drake's secondary criterion)."""
+    if alpha <= 0.5:
+        return False
+    ell_scale = 0.5 * (abs(ell_prev) + abs(ell_curr))
+    return abs(ell_prev - ell_curr) < abs_tol + rel_tol * ell_scale
+
+
 def _eval_line_search(alpha, v, dv, v_star, A, J, v_hat, R, mu, mu_hat,
                        mu_tilde, dp, dvc):
     """Evaluate dl/dalpha and d2l/dalpha2 at given alpha."""
@@ -178,6 +197,7 @@ def sap_solve(A, v_star, J, phi0, k, tau, mu, v0, dt,
         J, A, k, tau, dt, mu, phi0, beta, sigma)
 
     v = v0.copy()
+    ell_prev = np.inf
 
     for iteration in range(max_iter):
         vc = J @ v
@@ -197,5 +217,10 @@ def sap_solve(A, v_star, J, phi0, k, tau, mu, v0, dt,
         alpha = exact_line_search(v, dv, v_star, A, J, v_hat, R, mu,
                                    mu_hat, mu_tilde)
         v = v + alpha * dv
+
+        ell_curr = compute_cost(v, v_star, A, gamma, R)
+        if cost_convergence_check(ell_prev, ell_curr, alpha):
+            break
+        ell_prev = ell_curr
 
     return v

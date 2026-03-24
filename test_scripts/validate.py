@@ -1,8 +1,10 @@
 """
 Side-by-side validation of standalone implementation against Drake.
 
-Requires: conda activate drake-py (pydrake installed)
-Run from: plan/test_scripts/
+Requires: conda activate drake (pydrake installed)
+Run from: test_scripts/
+
+Author: Ganesh Arivoli <arivoli@wisc.edu>
 """
 
 import sys
@@ -12,6 +14,10 @@ import numpy as np
 import dynamics
 import contact
 import solver
+from main import (
+    MASS, RADIUS, GRAVITY, INCLINE_DEG, MU_STATIC,
+    DT, PENETRATION_ALLOWANCE,
+)
 
 # pydrake
 from pydrake.multibody.plant import (
@@ -27,14 +33,6 @@ from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.analysis import Simulator
 from pydrake.math import RigidTransform, RotationMatrix
 
-# --- Constants (must match main.py) ---
-MASS = 0.1
-RADIUS = 0.04
-GRAVITY = 9.8
-INCLINE_DEG = 15.0
-MU = 0.3
-DT = 1.0e-3
-PENETRATION_ALLOWANCE = 1.0e-5
 THETA = np.radians(INCLINE_DEG)
 
 
@@ -60,7 +58,7 @@ def setup_drake():
     # Inclined plane (half-space on world body)
     R_WH = RotationMatrix.MakeYRotation(THETA)
     X_WH = RigidTransform(R_WH, [0, 0, 0])
-    friction_plane = CoulombFriction(MU, MU)
+    friction_plane = CoulombFriction(MU_STATIC, MU_STATIC)
     plant.RegisterCollisionGeometry(
         plant.world_body(), X_WH, HalfSpace(),
         "InclinedPlaneCollisionGeometry", friction_plane)
@@ -71,7 +69,7 @@ def setup_drake():
         MASS, [0, 0, 0],
         UnitInertia(I_scalar / MASS, I_scalar / MASS, I_scalar / MASS))
     body = plant.AddRigidBody("BodyB", M_BBo)
-    friction_sphere = CoulombFriction(MU, MU)
+    friction_sphere = CoulombFriction(MU_STATIC, MU_STATIC)
     plant.RegisterCollisionGeometry(
         body, RigidTransform(), Sphere(RADIUS),
         "SphereB_CollisionGeometry", friction_sphere)
@@ -223,7 +221,7 @@ def validate_single_step(diagram, plant, scene_graph, q0, v0):
     geometry_k, dissipation = contact.estimate_contact_parameters(
         MASS, GRAVITY, PENETRATION_ALLOWANCE)
     k_combined, _, mu_combined, tau_combined = contact.combine_contact_properties(
-        geometry_k, geometry_k, dissipation, dissipation, MU, MU)
+        geometry_k, geometry_k, dissipation, dissipation, MU_STATIC, MU_STATIC)
 
     q, v = q0.copy(), v0.copy()
     M = dynamics.mass_matrix(q, I_B, MASS)
@@ -300,7 +298,7 @@ def validate_multi_step(diagram, plant, scene_graph, num_steps=200):
     geometry_k, dissipation = contact.estimate_contact_parameters(
         MASS, GRAVITY, PENETRATION_ALLOWANCE)
     k_combined, _, mu_combined, tau_combined = contact.combine_contact_properties(
-        geometry_k, geometry_k, dissipation, dissipation, MU, MU)
+        geometry_k, geometry_k, dissipation, dissipation, MU_STATIC, MU_STATIC)
 
     q, v = q0.copy(), v0.copy()
     max_q_diff = 0.0
@@ -338,8 +336,12 @@ def validate_multi_step(diagram, plant, scene_graph, num_steps=200):
         max_q_diff = max(max_q_diff, q_diff)
         max_v_diff = max(max_v_diff, v_diff)
 
-        if (step + 1) % 100 == 0 or q_diff > 1e-6 or v_diff > 1e-6:
+        if (step + 1) % 100 == 0:
             print(f"  Step {step+1:4d}: q_diff={q_diff:.2e}, v_diff={v_diff:.2e}")
+            print(f"    q_mine=[{q[4]:.6f},{q[5]:.6f},{q[6]:.6f}] "
+                  f"q_drake=[{q_drake[4]:.6f},{q_drake[5]:.6f},{q_drake[6]:.6f}]")
+            print(f"    v_mine=[{v[3]:.6f},{v[4]:.6f},{v[5]:.6f}] "
+                  f"v_drake=[{v_drake[3]:.6f},{v_drake[4]:.6f},{v_drake[5]:.6f}]")
 
     ok = max_q_diff < 1e-4 and max_v_diff < 1e-4
     status = "PASS" if ok else "FAIL"
@@ -359,7 +361,7 @@ def main():
     plant_context = plant.GetMyMutableContextFromRoot(context)
 
     # Test states
-    q_contact = np.array([1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.04])  # on plane
+    q_contact = np.array([1.0, 0.0, 0.0, 0.0, -1.0, 0.0, RADIUS])  # on plane
     v_contact = np.array([0.0, 0.0, 0.0, 0.5, 0.0, -0.1])
     q_above = np.array([1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.2])  # above plane
     v_zero = np.zeros(6)
