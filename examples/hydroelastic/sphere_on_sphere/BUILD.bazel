@@ -1,0 +1,18 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_py.bzl", "drake_py_binary")
+
+package(default_visibility = ["//visibility:private"])
+
+drake_py_binary(
+    name = "sphere_on_sphere",
+    srcs = ["sphere_on_sphere.py"],
+    deps = [
+        "//bindings/pydrake",
+    ],
+    add_test_rule = True,
+    test_rule_args = [
+        "--mode=impact",
+    ],
+)
+
+add_lint_tests()
