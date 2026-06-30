@@ -1,11 +1,18 @@
 #include "drake/multibody/plant/multibody_plant.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <random>
 #include <set>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -15,7 +22,10 @@
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/geometry_roles.h"
+#include "drake/geometry/proximity/mesh_field_linear.h"
+#include "drake/geometry/proximity/polygon_surface_mesh.h"
 #include "drake/geometry/proximity_properties.h"
+#include "drake/geometry/proximity/triangle_surface_mesh.h"
 #include "drake/geometry/query_results/contact_surface.h"
 #include "drake/geometry/render/render_label.h"
 #include "drake/math/random_rotation.h"
@@ -57,11 +67,17 @@ using drake::geometry::GeometryFrame;
 using drake::geometry::GeometryId;
 using drake::geometry::GeometryInstance;
 using drake::geometry::GeometrySet;
+using drake::geometry::HydroelasticContactRepresentation;
+using drake::geometry::MeshGradientMode;
 using drake::geometry::PenetrationAsPointPair;
+using drake::geometry::PolygonSurfaceMesh;
 using drake::geometry::ProximityProperties;
 using drake::geometry::SceneGraph;
 using drake::geometry::SceneGraphInspector;
 using drake::geometry::SourceId;
+using drake::geometry::SurfaceTriangle;
+using drake::geometry::TriangleSurfaceMesh;
+using drake::geometry::TriangleSurfaceMeshFieldLinear;
 using drake::geometry::render::RenderLabel;
 using drake::math::RigidTransform;
 using drake::math::RotationMatrix;
@@ -250,6 +266,231 @@ struct JointLimitsPenaltyParametersEstimator {
 }  // namespace internal
 
 namespace {
+
+// Experiment-only controls for studying sensitivity to the triangle fan used to
+// discretize hydroelastic contact polygons. This is disabled unless
+// DRAKE_HYDRO_SURFACE_EXPERIMENT=random_fan is set.
+struct HydroSurfaceExperimentSettings {
+  // Base seed for reproducible random fan points.
+  int seed{1};
+  // Number of discrete steps per random epoch. A value of zero keeps one fixed
+  // triangulation for the run.
+  int reseed_period{1};
+  // Interpolates between Drake's deterministic centroid fan point (0) and a
+  // uniformly sampled random point inside the polygon (1).
+  double fan_blend{1.0};
+};
+
+std::optional<HydroSurfaceExperimentSettings>
+GetHydroSurfaceExperimentSettings() {
+  const char* mode = std::getenv("DRAKE_HYDRO_SURFACE_EXPERIMENT");
+  if (mode == nullptr || std::string(mode).empty() ||
+      mode == std::string("off")) {
+    return std::nullopt;
+  }
+  if (mode != std::string("random_fan")) {
+    throw std::runtime_error(
+        "DRAKE_HYDRO_SURFACE_EXPERIMENT must be unset, 'off', or "
+        "'random_fan'.");
+  }
+
+  HydroSurfaceExperimentSettings settings;
+  if (const char* seed = std::getenv("DRAKE_HYDRO_SURFACE_SEED")) {
+    settings.seed = std::stoi(seed);
+  }
+  if (const char* reseed_period =
+          std::getenv("DRAKE_HYDRO_SURFACE_RESEED_PERIOD")) {
+    settings.reseed_period = std::stoi(reseed_period);
+    if (settings.reseed_period < 0) {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_SURFACE_RESEED_PERIOD must be non-negative.");
+    }
+  }
+  if (const char* fan_blend = std::getenv("DRAKE_HYDRO_SURFACE_FAN_BLEND")) {
+    settings.fan_blend = std::stod(fan_blend);
+    if (settings.fan_blend < 0.0 || settings.fan_blend > 1.0) {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_SURFACE_FAN_BLEND must be in [0, 1].");
+    }
+  }
+  return settings;
+}
+
+template <typename T>
+HydroelasticContactRepresentation GetContactSurfaceRepresentationForQuery(
+    HydroelasticContactRepresentation requested) {
+  if constexpr (std::is_same_v<T, double>) {
+    if (GetHydroSurfaceExperimentSettings().has_value()) {
+      // The random fan experiment needs the untessellated contact polygons;
+      // asking SceneGraph for triangles would already apply Drake's
+      // deterministic centroid fan.
+      return HydroelasticContactRepresentation::kPolygon;
+    }
+  }
+  return requested;
+}
+
+std::int64_t CalcHydroSurfaceRandomEpoch(double time, double time_step,
+                                         int reseed_period) {
+  if (reseed_period == 0 || time_step <= 0.0) {
+    return 0;
+  }
+  // Reseeding is keyed by simulation time, but only takes effect when
+  // GeometryContactData is recomputed.
+  const double step = std::floor(time / time_step + 0.5);
+  return static_cast<std::int64_t>(step) / reseed_period;
+}
+
+Vector3<double> SamplePointInTriangle(const Vector3<double>& a,
+                                      const Vector3<double>& b,
+                                      const Vector3<double>& c,
+                                      std::mt19937* rng) {
+  DRAKE_DEMAND(rng != nullptr);
+  std::uniform_real_distribution<double> uniform(0.0, 1.0);
+  const double r1 = std::sqrt(uniform(*rng));
+  const double r2 = uniform(*rng);
+  return (1.0 - r1) * a + r1 * (1.0 - r2) * b + r1 * r2 * c;
+}
+
+Vector3<double> SamplePointInConvexPolygon(
+    const PolygonSurfaceMesh<double>& mesh_W, int face, std::mt19937* rng) {
+  DRAKE_DEMAND(rng != nullptr);
+  const auto polygon = mesh_W.element(face);
+  const int num_vertices = polygon.num_vertices();
+  DRAKE_DEMAND(num_vertices >= 3);
+
+  const Vector3<double>& p_WV0 = mesh_W.vertex(polygon.vertex(0));
+  std::vector<double> triangle_areas;
+  triangle_areas.reserve(num_vertices - 2);
+  double total_area = 0.0;
+  for (int i = 1; i < num_vertices - 1; ++i) {
+    const Vector3<double>& p_WV1 = mesh_W.vertex(polygon.vertex(i));
+    const Vector3<double>& p_WV2 = mesh_W.vertex(polygon.vertex(i + 1));
+    const double area =
+        0.5 * (p_WV1 - p_WV0).cross(p_WV2 - p_WV0).norm();
+    triangle_areas.push_back(area);
+    total_area += area;
+  }
+
+  if (total_area <= 0.0) {
+    return mesh_W.element_centroid(face);
+  }
+
+  std::uniform_real_distribution<double> uniform(0.0, total_area);
+  const double area_sample = uniform(*rng);
+  double accumulated_area = 0.0;
+  int selected = 0;
+  for (int i = 0; i < static_cast<int>(triangle_areas.size()); ++i) {
+    accumulated_area += triangle_areas[i];
+    if (area_sample <= accumulated_area) {
+      selected = i;
+      break;
+    }
+  }
+
+  const Vector3<double>& p_WA = p_WV0;
+  const Vector3<double>& p_WB =
+      mesh_W.vertex(polygon.vertex(selected + 1));
+  const Vector3<double>& p_WC =
+      mesh_W.vertex(polygon.vertex(selected + 2));
+  return SamplePointInTriangle(p_WA, p_WB, p_WC, rng);
+}
+
+ContactSurface<double> MakeRandomFanContactSurface(
+    const ContactSurface<double>& surface,
+    const HydroSurfaceExperimentSettings& settings, std::mt19937* rng) {
+  DRAKE_DEMAND(rng != nullptr);
+  if (surface.is_triangle()) {
+    return surface;
+  }
+
+  const auto& poly_mesh_W = surface.poly_mesh_W();
+  const auto& poly_e_MN = surface.poly_e_MN();
+
+  // Preserve the contact patch boundary, plane, pressure field, and per-face
+  // pressure gradients. Only the interior fan point, and therefore the triangle
+  // areas and centroids consumed by the discrete solver, are changed.
+  std::vector<Vector3<double>> vertices_W;
+  std::vector<double> pressures;
+  vertices_W.reserve(poly_mesh_W.num_vertices() + poly_mesh_W.num_faces());
+  pressures.reserve(poly_mesh_W.num_vertices() + poly_mesh_W.num_faces());
+  for (int v = 0; v < poly_mesh_W.num_vertices(); ++v) {
+    vertices_W.push_back(poly_mesh_W.vertex(v));
+    pressures.push_back(poly_e_MN.EvaluateAtVertex(v));
+  }
+
+  std::vector<SurfaceTriangle> triangles;
+  triangles.reserve(poly_mesh_W.num_faces() * 4);
+  auto grad_eM_W = surface.HasGradE_M()
+                       ? std::make_unique<std::vector<Vector3<double>>>()
+                       : nullptr;
+  auto grad_eN_W = surface.HasGradE_N()
+                       ? std::make_unique<std::vector<Vector3<double>>>()
+                       : nullptr;
+
+  for (int face = 0; face < poly_mesh_W.num_faces(); ++face) {
+    const auto polygon = poly_mesh_W.element(face);
+    const Vector3<double>& p_WC = poly_mesh_W.element_centroid(face);
+    const Vector3<double> p_WR =
+        SamplePointInConvexPolygon(poly_mesh_W, face, rng);
+    const Vector3<double> p_WF =
+        p_WC + settings.fan_blend * (p_WR - p_WC);
+    const int fan_index = static_cast<int>(vertices_W.size());
+    vertices_W.push_back(p_WF);
+    pressures.push_back(poly_e_MN.EvaluateCartesian(face, p_WF));
+
+    int v2 = polygon.vertex(polygon.num_vertices() - 1);
+    for (int i = 0; i < polygon.num_vertices(); ++i) {
+      const int v1 = v2;
+      v2 = polygon.vertex(i);
+      triangles.emplace_back(v1, v2, fan_index);
+      if (grad_eM_W != nullptr) {
+        grad_eM_W->push_back(surface.EvaluateGradE_M_W(face));
+      }
+      if (grad_eN_W != nullptr) {
+        grad_eN_W->push_back(surface.EvaluateGradE_N_W(face));
+      }
+    }
+  }
+
+  auto tri_mesh_W = std::make_unique<TriangleSurfaceMesh<double>>(
+      std::move(triangles), std::move(vertices_W));
+  const auto* tri_mesh_W_ptr = tri_mesh_W.get();
+  auto tri_e_MN =
+      std::make_unique<TriangleSurfaceMeshFieldLinear<double, double>>(
+          std::move(pressures), tri_mesh_W_ptr, MeshGradientMode::kNone);
+  return ContactSurface<double>(surface.id_M(), surface.id_N(),
+                                std::move(tri_mesh_W), std::move(tri_e_MN),
+                                std::move(grad_eM_W), std::move(grad_eN_W));
+}
+
+void MaybeApplyHydroSurfaceExperiment(
+    double time, double time_step,
+    std::vector<ContactSurface<double>>* surfaces) {
+  DRAKE_DEMAND(surfaces != nullptr);
+  const std::optional<HydroSurfaceExperimentSettings> settings =
+      GetHydroSurfaceExperimentSettings();
+  if (!settings.has_value() || surfaces->empty()) {
+    return;
+  }
+
+  const std::int64_t epoch = CalcHydroSurfaceRandomEpoch(
+      time, time_step, settings->reseed_period);
+  std::seed_seq seed_sequence{
+      static_cast<std::uint32_t>(settings->seed),
+      static_cast<std::uint32_t>(epoch),
+      static_cast<std::uint32_t>(epoch >> 32),
+  };
+  std::mt19937 rng(seed_sequence);
+
+  std::vector<ContactSurface<double>> randomized_surfaces;
+  randomized_surfaces.reserve(surfaces->size());
+  for (const ContactSurface<double>& surface : *surfaces) {
+    randomized_surfaces.push_back(
+        MakeRandomFanContactSurface(surface, *settings, &rng));
+  }
+  *surfaces = std::move(randomized_surfaces);
+}
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -2997,7 +3238,12 @@ void MultibodyPlant<T>::CalcGeometryContactData(
     case ContactModel::kHydroelastic: {
       if constexpr (scalar_predicate<T>::is_bool) {
         storage.surfaces = query_object.ComputeContactSurfaces(
-            get_contact_surface_representation());
+            GetContactSurfaceRepresentationForQuery<T>(
+                get_contact_surface_representation()));
+        if constexpr (std::is_same_v<T, double>) {
+          MaybeApplyHydroSurfaceExperiment(context.get_time(), time_step(),
+                                           &storage.surfaces);
+        }
         break;
       } else {
         // TODO(SeanCurtis-TRI): Special case the QueryObject scalar support
@@ -3010,8 +3256,13 @@ void MultibodyPlant<T>::CalcGeometryContactData(
     case ContactModel::kHydroelasticWithFallback: {
       if constexpr (scalar_predicate<T>::is_bool) {
         query_object.ComputeContactSurfacesWithFallback(
-            get_contact_surface_representation(), &storage.surfaces,
-            &storage.point_pairs);
+            GetContactSurfaceRepresentationForQuery<T>(
+                get_contact_surface_representation()),
+            &storage.surfaces, &storage.point_pairs);
+        if constexpr (std::is_same_v<T, double>) {
+          MaybeApplyHydroSurfaceExperiment(context.get_time(), time_step(),
+                                           &storage.surfaces);
+        }
         break;
       } else {
         // TODO(SeanCurtis-TRI): Special case the QueryObject scalar support
