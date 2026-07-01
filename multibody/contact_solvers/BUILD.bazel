@@ -89,7 +89,10 @@ drake_cc_library(
     name = "contact_solver_results",
     srcs = ["contact_solver_results.cc"],
     hdrs = ["contact_solver_results.h"],
-    deps = ["//common:default_scalars"],
+    deps = [
+        "//common:default_scalars",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
+    ],
 )
 
 drake_cc_library(
