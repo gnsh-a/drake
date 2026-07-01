@@ -75,6 +75,8 @@ void SapSolver<T>::PackSapSolverResults(const SapModel<T>& model,
   const VectorX<T>& tau_participating = model.EvalGeneralizedImpulses(context);
   results->j.setZero();
   model.velocities_permutation().ApplyInverse(tau_participating, &results->j);
+
+  results->statistics = stats_;
 }
 
 template <typename T>
@@ -103,11 +105,13 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     const SapContactProblem<double>& problem, const VectorX<double>& v_guess,
     SapSolverResults<double>* results) {
   if (problem.num_constraints() == 0) {
+    stats_.Reset();
     // In the absence of constraints the solution is trivially v = v*.
     results->Resize(problem.num_velocities(),
                     problem.num_constraint_equations());
     results->v = problem.v_star();
     results->j.setZero();
+    results->statistics = stats_;
     return SapSolverStatus::kSuccess;
   }
   auto model = std::make_unique<SapModel<double>>(
@@ -143,11 +147,13 @@ SapSolverStatus SapSolver<AutoDiffXd>::SolveWithGuess(
     const VectorX<AutoDiffXd>& v_guess_ad,
     SapSolverResults<AutoDiffXd>* results_ad) {
   if (problem_ad.num_constraints() == 0) {
+    stats_.Reset();
     // In the absence of constraints the solution is trivially v = v*.
     results_ad->Resize(problem_ad.num_velocities(),
                        problem_ad.num_constraint_equations());
     results_ad->v = problem_ad.v_star();
     results_ad->j.setZero();
+    results_ad->statistics = stats_;
     return SapSolverStatus::kSuccess;
   }
 
@@ -197,6 +203,7 @@ SapSolverStatus SapSolver<AutoDiffXd>::SolveWithGuess(
     results_ad->gamma = results.gamma;
     results_ad->vc = results.vc;
     results_ad->j = results.j;
+    results_ad->statistics = stats_;
     return SapSolverStatus::kSuccess;
   }
 

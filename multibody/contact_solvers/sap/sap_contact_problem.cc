@@ -212,6 +212,8 @@ void SapContactProblem<T>::ExpandContactSolverResults(
       reduced_results.gamma, &results->gamma);
   reduced_mapping.constraint_equation_permutation.ApplyInverse(
       reduced_results.vc, &results->vc);
+
+  results->statistics = reduced_results.statistics;
 }
 
 template <typename T>

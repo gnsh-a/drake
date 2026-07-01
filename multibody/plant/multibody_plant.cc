@@ -1161,6 +1161,28 @@ double MultibodyPlant<T>::get_sap_near_rigid_threshold() const {
 }
 
 template <typename T>
+std::optional<contact_solvers::internal::SapStatistics>
+MultibodyPlant<T>::EvalSapSolverStatistics(
+    const systems::Context<T>& context) const {
+  this->ValidateContext(context);
+  if (!is_discrete()) {
+    return std::nullopt;
+  }
+  if (get_discrete_contact_solver() != DiscreteContactSolver::kSap) {
+    return std::nullopt;
+  }
+  if (!use_sampled_output_ports_) {
+    return std::nullopt;
+  }
+  const DiscreteStepMemory::Data<T>* const memory =
+      get_discrete_step_memory(context);
+  if (memory == nullptr) {
+    return std::nullopt;
+  }
+  return memory->contact_solver_results.sap_statistics;
+}
+
+template <typename T>
 ContactModel MultibodyPlant<T>::get_contact_model() const {
   return contact_model_;
 }
