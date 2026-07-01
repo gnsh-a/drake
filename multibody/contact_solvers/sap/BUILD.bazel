@@ -32,6 +32,7 @@ drake_cc_package_library(
         ":sap_pd_controller_constraint",
         ":sap_solver",
         ":sap_solver_results",
+        ":sap_solver_statistics",
         ":sap_tendon_constraint",
         ":sap_weld_constraint",
     ],
@@ -295,6 +296,7 @@ drake_cc_library(
     deps = [
         ":sap_model",
         ":sap_solver_results",
+        ":sap_solver_statistics",
         "//common:default_scalars",
         "//common:essential",
         "//math:linear_solve",
@@ -311,7 +313,15 @@ drake_cc_library(
     name = "sap_solver_results",
     srcs = ["sap_solver_results.cc"],
     hdrs = ["sap_solver_results.h"],
-    deps = ["//common:default_scalars"],
+    deps = [
+        ":sap_solver_statistics",
+        "//common:default_scalars",
+    ],
+)
+
+drake_cc_library(
+    name = "sap_solver_statistics",
+    hdrs = ["sap_solver_statistics.h"],
 )
 
 drake_cc_googletest(
