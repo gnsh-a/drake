@@ -1,6 +1,15 @@
 #include "drake/multibody/plant/discrete_update_manager.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <optional>
+#include <random>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <utility>
 
 #include "drake/multibody/plant/contact_properties.h"
@@ -23,6 +32,148 @@ using drake::multibody::contact_solvers::internal::ContactSolverResults;
 using drake::multibody::contact_solvers::internal::MatrixBlock;
 using drake::systems::Context;
 using drake::systems::DependencyTicket;
+
+namespace {
+
+enum class HydroNormalExperimentMode {
+  // Perturb the normal used for the contact frame, velocity decomposition, and
+  // contact Jacobian. Keep hydroelastic gradient projection on the original
+  // surface normal.
+  kFrameOnly,
+  // Also use the perturbed normal when projecting pressure gradients, changing
+  // the effective hydroelastic stiffness and penetration reconstruction.
+  kCoupledGradient,
+};
+
+// Experiment-only controls for studying SAP sensitivity to noisy hydroelastic
+// contact normals. Disabled unless DRAKE_HYDRO_NORMAL_EXPERIMENT=gaussian.
+struct HydroNormalExperimentSettings {
+  // Base seed for reproducible normal perturbations.
+  int seed{1};
+  // Number of discrete steps per random epoch. A value of zero keeps one fixed
+  // normal perturbation field for the run.
+  int reseed_period{0};
+  // Standard deviation of the tangent-plane Gaussian perturbation.
+  double sigma_rad{M_PI / 180.0};
+  // Hard angular cap to avoid rare Gaussian outliers.
+  double max_angle_rad{3.0 * M_PI / 180.0};
+  HydroNormalExperimentMode mode{HydroNormalExperimentMode::kFrameOnly};
+};
+
+double DegreesToRadians(double degrees) {
+  return degrees * M_PI / 180.0;
+}
+
+std::optional<HydroNormalExperimentSettings>
+GetHydroNormalExperimentSettings() {
+  const char* experiment = std::getenv("DRAKE_HYDRO_NORMAL_EXPERIMENT");
+  if (experiment == nullptr || std::string(experiment).empty() ||
+      experiment == std::string("off")) {
+    return std::nullopt;
+  }
+  if (experiment != std::string("gaussian")) {
+    throw std::runtime_error(
+        "DRAKE_HYDRO_NORMAL_EXPERIMENT must be unset, 'off', or 'gaussian'.");
+  }
+
+  HydroNormalExperimentSettings settings;
+  if (const char* seed = std::getenv("DRAKE_HYDRO_NORMAL_SEED")) {
+    settings.seed = std::stoi(seed);
+  }
+  if (const char* reseed_period =
+          std::getenv("DRAKE_HYDRO_NORMAL_RESEED_PERIOD")) {
+    settings.reseed_period = std::stoi(reseed_period);
+    if (settings.reseed_period < 0) {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_NORMAL_RESEED_PERIOD must be non-negative.");
+    }
+  }
+  if (const char* sigma = std::getenv("DRAKE_HYDRO_NORMAL_SIGMA_DEG")) {
+    settings.sigma_rad = DegreesToRadians(std::stod(sigma));
+    if (settings.sigma_rad < 0.0) {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_NORMAL_SIGMA_DEG must be non-negative.");
+    }
+  }
+  if (const char* max_angle = std::getenv("DRAKE_HYDRO_NORMAL_MAX_ANGLE_DEG")) {
+    settings.max_angle_rad = DegreesToRadians(std::stod(max_angle));
+    if (settings.max_angle_rad < 0.0) {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_NORMAL_MAX_ANGLE_DEG must be non-negative.");
+    }
+  }
+  if (const char* mode = std::getenv("DRAKE_HYDRO_NORMAL_MODE")) {
+    if (mode == std::string("frame_only")) {
+      settings.mode = HydroNormalExperimentMode::kFrameOnly;
+    } else if (mode == std::string("coupled_gradient")) {
+      settings.mode = HydroNormalExperimentMode::kCoupledGradient;
+    } else {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_NORMAL_MODE must be 'frame_only' or "
+          "'coupled_gradient'.");
+    }
+  }
+  return settings;
+}
+
+std::int64_t CalcHydroNormalRandomEpoch(double time, double time_step,
+                                        int reseed_period) {
+  if (reseed_period == 0 || time_step <= 0.0) {
+    return 0;
+  }
+  // Reseeding is keyed by simulation time, matching the existing hydro surface
+  // random-fan experiment convention.
+  const double step = std::floor(time / time_step + 0.5);
+  return static_cast<std::int64_t>(step) / reseed_period;
+}
+
+Vector3<double> PerturbHydroNormal(
+    const HydroNormalExperimentSettings& settings, double time,
+    double time_step, int surface_index, int face_index,
+    const Vector3<double>& nhat_BA_W) {
+  if (settings.sigma_rad == 0.0 || settings.max_angle_rad == 0.0) {
+    return nhat_BA_W;
+  }
+
+  const std::int64_t epoch =
+      CalcHydroNormalRandomEpoch(time, time_step, settings.reseed_period);
+  std::seed_seq seed_sequence{
+      static_cast<std::uint32_t>(settings.seed),
+      static_cast<std::uint32_t>(epoch),
+      static_cast<std::uint32_t>(epoch >> 32),
+      static_cast<std::uint32_t>(surface_index),
+      static_cast<std::uint32_t>(face_index),
+  };
+  std::mt19937 rng(seed_sequence);
+  std::normal_distribution<double> gaussian(0.0, settings.sigma_rad);
+
+  // Sample isotropic angular noise in the tangent plane of the original normal,
+  // then renormalize onto the unit sphere.
+  const Vector3<double> reference =
+      std::abs(nhat_BA_W.z()) < 0.9 ? Vector3<double>::UnitZ()
+                                    : Vector3<double>::UnitX();
+  const Vector3<double> t1 = nhat_BA_W.cross(reference).normalized();
+  const Vector3<double> t2 = nhat_BA_W.cross(t1).normalized();
+  Vector3<double> noisy =
+      (nhat_BA_W + gaussian(rng) * t1 + gaussian(rng) * t2).normalized();
+
+  const double cos_angle =
+      std::clamp(nhat_BA_W.dot(noisy), -1.0, 1.0);
+  const double angle = std::acos(cos_angle);
+  if (angle <= settings.max_angle_rad) {
+    return noisy;
+  }
+
+  // Preserve the sampled tangent direction while clipping the angular
+  // displacement to the configured cap.
+  const Vector3<double> tangent =
+      (noisy - noisy.dot(nhat_BA_W) * nhat_BA_W).normalized();
+  noisy = std::cos(settings.max_angle_rad) * nhat_BA_W +
+          std::sin(settings.max_angle_rad) * tangent;
+  return noisy.normalized();
+}
+
+}  // namespace
 
 template <typename T>
 DiscreteUpdateManager<T>::~DiscreteUpdateManager() = default;
@@ -809,6 +960,10 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForHydroelasticContact(
   const SpanningForest& forest = get_forest();
   const Eigen::VectorBlock<const VectorX<T>> v = plant().GetVelocities(context);
   const Frame<T>& frame_W = plant().world_frame();
+  std::optional<HydroNormalExperimentSettings> normal_settings;
+  if constexpr (std::is_same_v<T, double>) {
+    normal_settings = GetHydroNormalExperimentSettings();
+  }
 
   // Scratch workspace variables.
   const int nv = plant().num_velocities();
@@ -882,7 +1037,25 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForHydroelasticContact(
         // From ContactSurface's documentation: The normal of each face is
         // guaranteed to point "out of" N and "into" M. Recall that A is
         // associated with M, and B is associated with N.
-        const Vector3<T>& nhat_BA_W = s.face_normal(face);
+        const Vector3<T>& nhat_BA_original_W = s.face_normal(face);
+        Vector3<T> nhat_BA_pair_W = nhat_BA_original_W;
+        if constexpr (std::is_same_v<T, double>) {
+          if (normal_settings.has_value()) {
+            nhat_BA_pair_W =
+                PerturbHydroNormal(*normal_settings, context.get_time(),
+                                   plant().time_step(), surface_index, face,
+                                   nhat_BA_original_W);
+          }
+        }
+        const bool use_noisy_gradient =
+            normal_settings.has_value() &&
+            normal_settings->mode ==
+                HydroNormalExperimentMode::kCoupledGradient;
+        // In frame-only mode, only the contact frame/Jacobian sees the noisy
+        // normal. In coupled-gradient mode, the hydroelastic scalar compliance
+        // terms also use the noisy normal through the gradient projection below.
+        const Vector3<T>& nhat_BA_gradient_W =
+            use_noisy_gradient ? nhat_BA_pair_W : nhat_BA_original_W;
 
         // One dimensional pressure gradient (in Pa/m). Unlike [Masterjohn
         // 2022], for convenience we define both pressure gradients
@@ -891,10 +1064,10 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForHydroelasticContact(
         // [Masterjohn 2022] Velocity Level Approximation of Pressure
         // Field Contact Patches.
         const T gM = M_is_compliant
-                         ? s.EvaluateGradE_M_W(face).dot(nhat_BA_W)
+                         ? s.EvaluateGradE_M_W(face).dot(nhat_BA_gradient_W)
                          : T(std::numeric_limits<double>::infinity());
         const T gN = N_is_compliant
-                         ? -s.EvaluateGradE_N_W(face).dot(nhat_BA_W)
+                         ? -s.EvaluateGradE_N_W(face).dot(nhat_BA_gradient_W)
                          : T(std::numeric_limits<double>::infinity());
 
         constexpr double kGradientEpsilon = 1.0e-14;
@@ -933,7 +1106,7 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForHydroelasticContact(
         // z-axis Cz equals nhat_AB_W. The tangent vectors are arbitrary,
         // with the only requirement being that they form a valid right
         // handed basis with nhat_AB_W.
-        const Vector3<T> nhat_AB_W = -nhat_BA_W;
+        const Vector3<T> nhat_AB_W = -nhat_BA_pair_W;
         math::RotationMatrix<T> R_WC =
             math::RotationMatrix<T>::MakeFromOneVector(nhat_AB_W, 2);
 
@@ -1014,7 +1187,7 @@ void DiscreteUpdateManager<T>::AppendDiscreteContactPairsForHydroelasticContact(
             .p_WC = p_WC,
             .p_ApC_W = p_AC_W,
             .p_BqC_W = p_BC_W,
-            .nhat_BA_W = nhat_BA_W,
+            .nhat_BA_W = nhat_BA_pair_W,
             .phi0 = phi0,
             .vn0 = vn0,
             .fn0 = fn0,
