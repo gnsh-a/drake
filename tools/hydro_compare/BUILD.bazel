@@ -1,0 +1,35 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_cc.bzl", "drake_cc_binary")
+
+package(default_visibility = ["//visibility:private"])
+
+filegroup(
+    name = "scene",
+    srcs = [
+        "sphere_box_bounce.yaml",
+        "sphere_box_hydro.yaml",
+    ],
+)
+
+drake_cc_binary(
+    name = "drake_hydro_contact_reference_cc",
+    srcs = [
+        "drake_hydro_contact_reference.cc",
+    ],
+    data = [":scene"],
+    deps = [
+        "//common:name_value",
+        "//common/yaml:yaml_io",
+        "//geometry:proximity_properties",
+        "//geometry:shape_specification",
+        "//math:geometric_transform",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
+        "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+        "//systems/framework:diagram_builder",
+        "//systems/framework:event_collection",
+    ],
+)
+
+add_lint_tests()

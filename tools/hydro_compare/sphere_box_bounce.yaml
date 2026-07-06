@@ -1,0 +1,18 @@
+# Softer sphere-box hydroelastic scene for the Drake SAP reference runner.
+# The initial downward velocity is tuned to show a visible rebound in sphere z.
+sphere:
+  radius: 0.05
+  hydroelastic_modulus: 1.0e5
+  initial_position: [0.0, 0.0, 0.22]
+  initial_linear_velocity: [0.0, 0.0, -4.0]
+
+box:
+  full_size: [0.2, 0.2, 0.2]
+  hydroelastic_modulus: 1.0e6
+
+material:
+  friction: 0.5
+  relaxation_time: 5.0e-3
+
+mesh:
+  sdf_target_voxel_size: 0.005

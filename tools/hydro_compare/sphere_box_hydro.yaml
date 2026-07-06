@@ -1,0 +1,16 @@
+# Nominal sphere-box hydroelastic scene for the Drake SAP reference runner.
+# A compliant sphere is dropped onto a stiffer, fixed compliant box.
+sphere:
+  radius: 0.05                       # m   -> foundation depth H = R
+  hydroelastic_modulus: 1.0e7        # Pa
+  initial_position: [0.0, 0.0, 0.2]  # m, world; z above the box top (0.1) so it falls
+
+box:
+  full_size: [0.2, 0.2, 0.2]    # m   half sizes = full / 2; H = min(full) / 2
+  hydroelastic_modulus: 1.0e8   # Pa
+
+material:
+  friction: 0.5
+
+mesh:
+  sdf_target_voxel_size: 0.005  # m
