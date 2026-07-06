@@ -1,0 +1,33 @@
+# Pure-sliding disk-on-plane hydroelastic scene for the Drake disk contact
+# reference runner. The disk is constrained to the horizontal plane via a PlanarJoint
+# (x, y, yaw free; z, roll, pitch locked at the initial height), so the
+# normal load stays constant and the hydro patch stays formed every frame.
+# No initial spin: friction should decelerate the disk at mu*g until it
+# stops, with negligible spin-down torque.
+#
+# Solver convention: use SAP for this separated slide-only solver-stats case.
+# Use TAMSI for the combined slide+spin analytic comparison.
+disk:
+  radius: 0.01213                        # m
+  thickness: 0.00175                     # m
+  hydroelastic_modulus: 1.0e7            # Pa
+  density: 7010.0                        # kg/m^3
+  # Calibrated so the static compliant contact force equals m*g at
+  # E=1.0e7 (probed empirically; nfz is extremely sensitive to z0 here,
+  # since the disk is thin so pressure = E*depth/half_thickness has a very
+  # steep gradient. 0.0108749 (naive box_top + thickness/2 - 1e-7) under-
+  # shot m*g by ~24%; this value settles to within ~0.2%).
+  initial_position: [0.0, 0.0, 0.010874868]   # m, world; locked plane height
+  initial_linear_velocity: [0.2, 0.0, 0.0]    # m/s, slide in +x
+  initial_angular_velocity: [0.0, 0.0, 0.0]   # rad/s, no spin
+
+box:
+  full_size: [0.2, 0.2, 0.02]   # m   half sizes = full / 2
+  hydroelastic_modulus: 1.0e7   # Pa
+
+material:
+  friction: 0.2
+  relaxation_time: 1.0e-3
+
+mesh:
+  sdf_target_voxel_size: 0.0025  # m

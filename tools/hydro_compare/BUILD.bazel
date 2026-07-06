@@ -11,6 +11,15 @@ filegroup(
     ],
 )
 
+filegroup(
+    name = "disk_scene",
+    srcs = [
+        "disk_plane.yaml",
+        "disk_slide.yaml",
+        "disk_spin.yaml",
+    ],
+)
+
 drake_cc_binary(
     name = "drake_hydro_contact_reference_cc",
     srcs = [
@@ -25,6 +34,30 @@ drake_cc_binary(
         "//math:geometric_transform",
         "//multibody/contact_solvers/sap:sap_solver_statistics",
         "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+        "//systems/framework:diagram_builder",
+        "//systems/framework:event_collection",
+    ],
+)
+
+drake_cc_binary(
+    name = "drake_disk_contact_reference_cc",
+    srcs = [
+        "drake_disk_contact_reference.cc",
+    ],
+    data = [":disk_scene"],
+    deps = [
+        "//common:name_value",
+        "//common/yaml:yaml_io",
+        "//geometry:geometry_ids",
+        "//geometry:proximity_properties",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
+        "//multibody/plant",
+        "//multibody/tree",
         "//systems/analysis:simulator",
         "//systems/framework:diagram",
         "//systems/framework:diagram_builder",
