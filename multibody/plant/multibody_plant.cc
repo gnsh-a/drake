@@ -1183,6 +1183,28 @@ MultibodyPlant<T>::EvalSapSolverStatistics(
 }
 
 template <typename T>
+std::optional<contact_solvers::internal::TamsiStatistics>
+MultibodyPlant<T>::EvalTamsiSolverStatistics(
+    const systems::Context<T>& context) const {
+  this->ValidateContext(context);
+  if (!is_discrete()) {
+    return std::nullopt;
+  }
+  if (get_discrete_contact_solver() != kDiscreteContactSolverTamsi) {
+    return std::nullopt;
+  }
+  if (!use_sampled_output_ports_) {
+    return std::nullopt;
+  }
+  const DiscreteStepMemory::Data<T>* const memory =
+      get_discrete_step_memory(context);
+  if (memory == nullptr) {
+    return std::nullopt;
+  }
+  return memory->contact_solver_results.tamsi_statistics;
+}
+
+template <typename T>
 ContactModel MultibodyPlant<T>::get_contact_model() const {
   return contact_model_;
 }
