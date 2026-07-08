@@ -1,5 +1,6 @@
 #include "drake/multibody/plant/tamsi_driver.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@
 using drake::geometry::GeometryId;
 using drake::math::RigidTransform;
 using drake::multibody::contact_solvers::internal::ContactSolverResults;
+using drake::multibody::contact_solvers::internal::TamsiStatistics;
 
 namespace drake {
 namespace multibody {
@@ -68,6 +70,8 @@ void TamsiDriver<T>::CalcContactSolverResults(
   DRAKE_ASSERT(context.num_continuous_states() == 0);
   // Only discrete state updates for rigid bodies is supported.
   DRAKE_ASSERT(context.num_discrete_state_groups() == 1);
+  results->sap_statistics.reset();
+  results->tamsi_statistics.reset();
 
   // Compute non-contact forces at the previous time step. This also checks
   // whether an algebra loop exists but isn't detected when building the diagram
@@ -191,6 +195,7 @@ void TamsiDriver<T>::CalcContactSolverResults(
   results->ft = results_unlocked.ft;
   results->vn = results_unlocked.vn;
   results->vt = results_unlocked.vt;
+  results->tamsi_statistics = results_unlocked.tamsi_statistics;
 }
 
 template <typename T>
@@ -198,7 +203,8 @@ TamsiSolverResult TamsiDriver<T>::SolveUsingSubStepping(
     TamsiSolver<T>* tamsi_solver, int num_substeps, const MatrixX<T>& M0,
     const MatrixX<T>& Jn, const MatrixX<T>& Jt, const VectorX<T>& minus_tau,
     const VectorX<T>& stiffness, const VectorX<T>& damping,
-    const VectorX<T>& mu, const VectorX<T>& v0, const VectorX<T>& fn0) const {
+    const VectorX<T>& mu, const VectorX<T>& v0, const VectorX<T>& fn0,
+    TamsiStatistics* statistics) const {
   const double dt = plant().time_step();  // just a shorter alias.
   const double dt_substep = dt / num_substeps;
   VectorX<T> v0_substep = v0;
@@ -219,6 +225,17 @@ TamsiSolverResult TamsiDriver<T>::SolveUsingSubStepping(
                                               &damping, &mu);
 
     info = tamsi_solver->SolveWithGuess(dt_substep, v0_substep);
+    const TamsiSolverIterationStats& iteration_stats =
+        tamsi_solver->get_iteration_statistics();
+    ++statistics->num_solve_calls;
+    statistics->total_iterations += iteration_stats.num_iterations;
+    statistics->max_iterations_per_solve =
+        std::max(statistics->max_iterations_per_solve,
+                 iteration_stats.num_iterations);
+    if (!iteration_stats.residuals.empty()) {
+      statistics->final_vt_residual = iteration_stats.vt_residual();
+    }
+    statistics->result = info;
 
     // Break the sub-stepping loop on failure and return the info result.
     if (info != TamsiSolverResult::kSuccess) break;
@@ -267,12 +284,16 @@ void TamsiDriver<T>::CallTamsiSolver(
   // update time step dt or evaluate the validity of the model.
   const int kNumMaxSubTimeSteps = 20;
   int num_substeps = 0;
+  TamsiStatistics statistics;
   do {
     ++num_substeps;
+    ++statistics.num_substep_attempts;
     info = SolveUsingSubStepping(tamsi_solver, num_substeps, M0, Jn, Jt,
-                                 minus_tau, stiffness, damping, mu, v0, fn0);
+                                 minus_tau, stiffness, damping, mu, v0, fn0,
+                                 &statistics);
   } while (info != TamsiSolverResult::kSuccess &&
            num_substeps < kNumMaxSubTimeSteps);
+  statistics.result = info;
 
   if (info != TamsiSolverResult::kSuccess) {
     const std::string msg = fmt::format(
@@ -298,12 +319,14 @@ void TamsiDriver<T>::CallTamsiSolver(
   // file for analysis.
 
   // Update the results.
+  statistics.accepted_num_substeps = num_substeps;
   results->v_next = tamsi_solver->get_generalized_velocities();
   results->fn = tamsi_solver->get_normal_forces();
   results->ft = tamsi_solver->get_friction_forces();
   results->vn = tamsi_solver->get_normal_velocities();
   results->vt = tamsi_solver->get_tangential_velocities();
   results->tau_contact = tamsi_solver->get_generalized_contact_forces();
+  results->tamsi_statistics = statistics;
 }
 
 template <typename T>

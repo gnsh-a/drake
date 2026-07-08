@@ -2577,6 +2577,15 @@ class MultibodyPlant final : public internal::MultibodyTreeSystem<T> {
   std::optional<contact_solvers::internal::SapStatistics>
   EvalSapSolverStatistics(const systems::Context<T>& context) const;
 
+  /// Returns TAMSI solver statistics from the most recent sampled discrete
+  /// update, when available. The returned statistics are from the contact solve
+  /// used by the discrete update; this method does not solve contact again.
+  /// Returns std::nullopt for continuous plants, non-TAMSI discrete contact
+  /// solvers, live (not sampled) discrete output mode, and before the first
+  /// sampled discrete update.
+  std::optional<contact_solvers::internal::TamsiStatistics>
+  EvalTamsiSolverStatistics(const systems::Context<T>& context) const;
+
   /// Return the default value for contact representation, given the desired
   /// time step. Discrete systems default to use polygons; continuous systems
   /// default to use triangles.

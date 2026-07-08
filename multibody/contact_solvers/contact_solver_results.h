@@ -5,6 +5,7 @@
 #include "drake/common/default_scalars.h"
 #include "drake/common/eigen_types.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
+#include "drake/multibody/contact_solvers/tamsi_solver_statistics.h"
 
 namespace drake {
 namespace multibody {
@@ -28,6 +29,7 @@ struct ContactSolverResults {
     vt.resize(2 * num_contacts);
     tau_contact.resize(num_velocities);
     sap_statistics.reset();
+    tamsi_statistics.reset();
   }
 
   // Vector of generalized velocities at the next time step.
@@ -51,6 +53,9 @@ struct ContactSolverResults {
 
   // Solver statistics when these results were computed by SAP.
   std::optional<SapStatistics> sap_statistics;
+
+  // Solver statistics when these results were computed by TAMSI.
+  std::optional<TamsiStatistics> tamsi_statistics;
 };
 
 }  // namespace internal
