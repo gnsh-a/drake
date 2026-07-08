@@ -84,7 +84,8 @@ class TamsiDriver {
       TamsiSolver<T>* tamsi_solver, int num_substeps, const MatrixX<T>& M0,
       const MatrixX<T>& Jn, const MatrixX<T>& Jt, const VectorX<T>& minus_tau,
       const VectorX<T>& stiffness, const VectorX<T>& damping,
-      const VectorX<T>& mu, const VectorX<T>& v0, const VectorX<T>& fn0) const;
+      const VectorX<T>& mu, const VectorX<T>& v0, const VectorX<T>& fn0,
+      contact_solvers::internal::TamsiStatistics* statistics) const;
 
   // Helper to invoke TAMSI during the call to CalcContactSolverResults().
   void CallTamsiSolver(

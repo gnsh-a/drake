@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -28,6 +29,40 @@ TEST_P(RigidBodyOnCompliantGround, VerifyEquilibriumConfiguration) {
   const double normal_force_expected = CalcBodyWeight();
   const double normal_force = results.fn.sum();
   EXPECT_NEAR(normal_force, normal_force_expected, kEps);
+}
+
+TEST_P(RigidBodyOnCompliantGround, ReportsTamsiStatistics) {
+  contact_solvers::internal::ContactSolverResults<double> results;
+  tamsi_driver_->CalcContactSolverResults(*plant_context_, &results);
+
+  EXPECT_FALSE(results.sap_statistics.has_value());
+  ASSERT_TRUE(results.tamsi_statistics.has_value());
+  const contact_solvers::internal::TamsiStatistics& stats =
+      *results.tamsi_statistics;
+  EXPECT_EQ(stats.result, TamsiSolverResult::kSuccess);
+  EXPECT_EQ(stats.accepted_num_substeps, 1);
+  EXPECT_EQ(stats.num_substep_attempts, 1);
+  EXPECT_EQ(stats.num_solve_calls, 1);
+  EXPECT_GT(stats.total_iterations, 0);
+  EXPECT_GE(stats.max_iterations_per_solve, 1);
+  EXPECT_LE(stats.max_iterations_per_solve, stats.total_iterations);
+  EXPECT_GE(stats.final_vt_residual, 0.0);
+}
+
+TEST_P(RigidBodyOnCompliantGround, PlantEvaluatesTamsiStatistics) {
+  EXPECT_FALSE(
+      plant_->EvalTamsiSolverStatistics(*plant_context_).has_value());
+
+  Simulate(1);
+
+  const std::optional<contact_solvers::internal::TamsiStatistics> stats =
+      plant_->EvalTamsiSolverStatistics(*plant_context_);
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->result, TamsiSolverResult::kSuccess);
+  EXPECT_EQ(stats->accepted_num_substeps, 1);
+  EXPECT_EQ(stats->num_substep_attempts, 1);
+  EXPECT_EQ(stats->num_solve_calls, 1);
+  EXPECT_GT(stats->total_iterations, 0);
 }
 
 // Setup test cases using point and hydroelastic contact.
