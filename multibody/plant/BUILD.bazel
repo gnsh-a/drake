@@ -810,6 +810,21 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "multibody_plant_voxel_sdf_test",
+    deps = [
+        ":plant",
+        "//geometry:proximity_properties",
+        "//geometry:scene_graph",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//multibody/tree",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+    ],
+)
+
+drake_cc_googletest(
     name = "multibody_plant_jacobians_test",
     data = [
         "//examples/kuka_iiwa_arm/models",
