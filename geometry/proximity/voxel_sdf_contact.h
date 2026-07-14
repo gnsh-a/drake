@@ -64,9 +64,10 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
  pose. This calculator is double-only; SceneGraph dispatch supports it only for
  polygonal contact surfaces.
 
+ Geometry A supplies the traversed grid and can have either the lower or higher
+ GeometryId. The returned ContactSurface orders M and N by GeometryId.
+
  @returns nullptr if no A voxel produces a positive-area contact polygon.
- @pre `id_A < id_B`, so A and B retain the M and N roles, respectively, in the
-      returned ContactSurface.
  */
 std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,

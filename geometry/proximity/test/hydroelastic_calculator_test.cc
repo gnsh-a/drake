@@ -9,9 +9,11 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/eigen_types.h"
+#include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/geometry/proximity/proximity_utilities.h"
+#include "drake/geometry/proximity/voxel_sdf_contact.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/math/autodiff.h"
 #include "drake/math/roll_pitch_yaw.h"
@@ -584,7 +586,8 @@ GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesCurrentPoses) {
   EXPECT_EQ(surface->id_N(), voxel_B);
   EXPECT_FALSE(surface->is_triangle());
 
-  // Pair order is immaterial; the lower id always supplies the traversed grid.
+  // Pair order is immaterial. Equal widths use the lower id as the
+  // deterministic traversal tie-breaker.
   auto [reversed_result, reversed_surface] =
       calculator.MaybeMakeContactSurface(voxel_B, voxel_A);
   ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
@@ -608,6 +611,100 @@ GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesCurrentPoses) {
       calculator.MaybeMakeContactSurface(voxel_A, voxel_B);
   EXPECT_EQ(separated_result, ContactSurfaceResult::kCalculated);
   EXPECT_EQ(separated_surface, nullptr);
+}
+
+GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesFinerGrid) {
+  Geometries geometries;
+  unordered_map<GeometryId, RigidTransform<double>> X_WGs;
+
+  ProximityProperties coarse_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &coarse_properties);
+  ProximityProperties fine_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 100.0, &fine_properties);
+  const GeometryId coarse_id = GeometryId::get_new_id();
+  const GeometryId fine_id = GeometryId::get_new_id();
+  ASSERT_LT(coarse_id, fine_id);
+  const Box box(2.0, 2.0, 2.0);
+  geometries.MaybeAddGeometry(box, coarse_id, coarse_properties);
+  geometries.MaybeAddGeometry(box, fine_id, fine_properties);
+  X_WGs.emplace(coarse_id, RigidTransform<double>());
+  X_WGs.emplace(fine_id, RigidTransform<double>(Vector3d(1.4, 0.0, 0.0)));
+
+  const VoxelSdfGeometry& coarse =
+      geometries.compliant_geometry(coarse_id).voxel_sdf();
+  const VoxelSdfGeometry& fine =
+      geometries.compliant_geometry(fine_id).voxel_sdf();
+  const auto coarse_surface = CalcVoxelSdfCompliantContact(
+      coarse, X_WGs.at(coarse_id), coarse_id, fine, X_WGs.at(fine_id), fine_id);
+  const auto fine_surface = CalcVoxelSdfCompliantContact(
+      fine, X_WGs.at(fine_id), fine_id, coarse, X_WGs.at(coarse_id), coarse_id);
+  ASSERT_NE(coarse_surface, nullptr);
+  ASSERT_NE(fine_surface, nullptr);
+  ASSERT_GT(fine_surface->num_faces(), coarse_surface->num_faces());
+
+  ContactCalculator<double> calculator(
+      &X_WGs, &geometries, HydroelasticContactRepresentation::kPolygon);
+  auto [result, surface] =
+      calculator.MaybeMakeContactSurface(coarse_id, fine_id);
+  ASSERT_EQ(result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(surface, nullptr);
+  EXPECT_EQ(surface->id_M(), coarse_id);
+  EXPECT_EQ(surface->id_N(), fine_id);
+  EXPECT_TRUE(surface->Equal(*fine_surface));
+  ASSERT_EQ(surface->num_faces(), fine_surface->num_faces());
+  for (int f = 0; f < surface->num_faces(); ++f) {
+    EXPECT_TRUE(CompareMatrices(surface->EvaluateGradE_M_W(f),
+                                fine_surface->EvaluateGradE_M_W(f)));
+    EXPECT_TRUE(CompareMatrices(surface->EvaluateGradE_N_W(f),
+                                fine_surface->EvaluateGradE_N_W(f)));
+  }
+
+  auto [reversed_result, reversed_surface] =
+      calculator.MaybeMakeContactSurface(fine_id, coarse_id);
+  ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(reversed_surface, nullptr);
+  EXPECT_TRUE(surface->Equal(*reversed_surface));
+}
+
+GTEST_TEST(ContactCalculatorTest, EqualVoxelWidthsUseLowerIdGrid) {
+  Geometries geometries;
+  unordered_map<GeometryId, RigidTransform<double>> X_WGs;
+
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &properties);
+  const GeometryId lower_id = GeometryId::get_new_id();
+  const GeometryId higher_id = GeometryId::get_new_id();
+  ASSERT_LT(lower_id, higher_id);
+  geometries.MaybeAddGeometry(Box(2.0, 2.0, 2.0), lower_id, properties);
+  geometries.MaybeAddGeometry(Box(2.0, 3.0, 4.0), higher_id, properties);
+  X_WGs.emplace(lower_id, RigidTransform<double>());
+  X_WGs.emplace(higher_id, RigidTransform<double>(
+                               RotationMatrix<double>::MakeZRotation(0.2),
+                               Vector3d(1.2, 0.1, 0.0)));
+
+  const VoxelSdfGeometry& lower =
+      geometries.compliant_geometry(lower_id).voxel_sdf();
+  const VoxelSdfGeometry& higher =
+      geometries.compliant_geometry(higher_id).voxel_sdf();
+  const auto lower_surface =
+      CalcVoxelSdfCompliantContact(lower, X_WGs.at(lower_id), lower_id, higher,
+                                   X_WGs.at(higher_id), higher_id);
+  const auto higher_surface =
+      CalcVoxelSdfCompliantContact(higher, X_WGs.at(higher_id), higher_id,
+                                   lower, X_WGs.at(lower_id), lower_id);
+  ASSERT_NE(lower_surface, nullptr);
+  ASSERT_NE(higher_surface, nullptr);
+  ASSERT_FALSE(lower_surface->Equal(*higher_surface));
+
+  ContactCalculator<double> calculator(
+      &X_WGs, &geometries, HydroelasticContactRepresentation::kPolygon);
+  auto [result, surface] =
+      calculator.MaybeMakeContactSurface(higher_id, lower_id);
+  ASSERT_EQ(result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(surface, nullptr);
+  EXPECT_EQ(surface->id_M(), lower_id);
+  EXPECT_EQ(surface->id_N(), higher_id);
+  EXPECT_TRUE(surface->Equal(*lower_surface));
 }
 
 GTEST_TEST(ContactCalculatorTest, UnsupportedVoxelPairsStopBeforeMeshAccess) {

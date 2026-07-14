@@ -120,10 +120,17 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
     if constexpr (std::is_same_v<T, double>) {
       if (representation_ == HydroelasticContactRepresentation::kPolygon &&
           compliant_A.is_voxel_sdf() && compliant_B.is_voxel_sdf()) {
+        const VoxelSdfGeometry& voxel_A = compliant_A.voxel_sdf();
+        const VoxelSdfGeometry& voxel_B = compliant_B.voxel_sdf();
+        // Traverse the finer grid. Equal widths retain the lower-id traversal
+        // selected above, preserving deterministic legacy behavior.
+        const bool traverse_A = voxel_A.voxel_width() <= voxel_B.voxel_width();
         std::unique_ptr<ContactSurface<double>> surface =
-            CalcVoxelSdfCompliantContact(
-                compliant_A.voxel_sdf(), X_WGs_.at(id_A), id_A,
-                compliant_B.voxel_sdf(), X_WGs_.at(id_B), id_B);
+            traverse_A
+                ? CalcVoxelSdfCompliantContact(voxel_A, X_WGs_.at(id_A), id_A,
+                                               voxel_B, X_WGs_.at(id_B), id_B)
+                : CalcVoxelSdfCompliantContact(voxel_B, X_WGs_.at(id_B), id_B,
+                                               voxel_A, X_WGs_.at(id_A), id_A);
         return {ContactSurfaceResult::kCalculated, std::move(surface)};
       }
     }

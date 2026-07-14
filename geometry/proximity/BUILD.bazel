@@ -1444,6 +1444,7 @@ drake_cc_googletest(
     name = "hydroelastic_calculator_test",
     deps = [
         ":hydroelastic_calculator",
+        ":voxel_sdf_contact",
         "//common/test_utilities",
         "//math:autodiff",
     ],

@@ -235,10 +235,9 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B) {
-  DRAKE_DEMAND(id_A < id_B);
-
   // Traverse and build in A. B's queried point and gradient are converted into
-  // A for each cell; no registered representation stores posed data.
+  // A for each cell; no registered representation stores posed data. A may
+  // have either id; ContactSurface orders M and N by GeometryId.
   const math::RigidTransformd X_AB = X_WA.InvertAndCompose(X_WB);
   const math::RigidTransformd X_BA = X_AB.inverse();
   PolyMeshBuilder<double> builder_A;
@@ -277,8 +276,13 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
           vertex_indices.push_back(builder_A.AddVertex(polygon->vertices_A[v],
                                                        polygon->pressures[v]));
         }
+        // The contact field convention stores geometry M's pressure gradient.
+        // M is the lower-id geometry even when the higher-id A supplies the
+        // finer traversal grid.
+        const Vector3d& grad_p_M_A =
+            id_A < id_B ? polygon->grad_p_A : polygon->grad_p_B_A;
         const int faces_added = builder_A.AddPolygon(
-            vertex_indices, polygon->nhat_BA_A, polygon->grad_p_A);
+            vertex_indices, polygon->nhat_BA_A, grad_p_M_A);
         DRAKE_DEMAND(faces_added == 1);
         grad_p_A_A_per_face.push_back(polygon->grad_p_A);
         grad_p_B_A_per_face.push_back(polygon->grad_p_B_A);

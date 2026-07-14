@@ -416,7 +416,7 @@ TEST_F(ProximityEngineTests, VoxelSdfContactDispatchAndFallback) {
   ProximityProperties properties;
   AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &properties);
   const GeometryId id_A = AddDynamic(box, Vector3d::Zero(), properties);
-  const GeometryId id_B = AddDynamic(box, Vector3d(1.5, 0.0, 0.0), properties);
+  const GeometryId id_B = AddDynamic(box, Vector3d(1.4, 0.0, 0.0), properties);
   ASSERT_LT(id_A, id_B);
 
   engine_.UpdateWorldPoses(X_WGs_);
@@ -428,14 +428,16 @@ TEST_F(ProximityEngineTests, VoxelSdfContactDispatchAndFallback) {
   EXPECT_FALSE(surfaces[0].is_triangle());
   const ContactSurface<double> initial_surface(surfaces[0]);
 
-  // Property replacement rebuilds the registered grid and the next query
-  // immediately uses the replacement representation.
+  // Replacing only the higher-id geometry with a finer grid makes it supply the
+  // traversal grid on the next query.
   ProximityProperties replacement;
-  AddCompliantHydroelasticVoxelSdfProperties(0.25, 200.0, &replacement);
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 100.0, &replacement);
   const InternalGeometry geometry(
       SourceId::get_new_id(), std::make_unique<Box>(box), FrameId::get_new_id(),
-      id_A, "voxel_A", math::RigidTransformd());
+      id_B, "voxel_B", math::RigidTransformd());
   engine_.UpdateRepresentationForNewProperties(geometry, replacement);
+  EXPECT_EQ(Tester::compliant_geometry(id_B, engine_).voxel_sdf().voxel_width(),
+            0.25);
   surfaces = engine_.ComputeContactSurfaces(
       HydroelasticContactRepresentation::kPolygon, X_WGs_);
   ASSERT_EQ(surfaces.size(), 1u);
@@ -449,7 +451,7 @@ TEST_F(ProximityEngineTests, VoxelSdfContactDispatchAndFallback) {
                       HydroelasticContactRepresentation::kPolygon, X_WGs_)
                   .empty());
 
-  X_WGs_.at(id_B) = RigidTransformd(Vector3d(1.5, 0.0, 0.0));
+  X_WGs_.at(id_B) = RigidTransformd(Vector3d(1.4, 0.0, 0.0));
   engine_.UpdateWorldPoses(X_WGs_);
   DRAKE_EXPECT_THROWS_MESSAGE(
       engine_.ComputeContactSurfaces(

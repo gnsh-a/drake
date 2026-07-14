@@ -397,6 +397,24 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, FaceOverlapDepthsAndMultipleVoxels) {
   EXPECT_GT(deeper->num_faces(), 1);
 }
 
+GTEST_TEST(VoxelSdfContactSurfaceTest, TraversalGeometryMayHaveHigherId) {
+  const VoxelSdfGeometry coarse_A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const VoxelSdfGeometry fine_B(Box(2.0, 2.0, 2.0), 0.25, 100.0);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA;
+  const RigidTransformd X_WB(Vector3d(1.4, 0.0, 0.0));
+
+  const auto coarse_surface =
+      CalcVoxelSdfCompliantContact(coarse_A, X_WA, id_A, fine_B, X_WB, id_B);
+  const auto fine_surface =
+      CalcVoxelSdfCompliantContact(fine_B, X_WB, id_B, coarse_A, X_WA, id_A);
+  ASSERT_NE(coarse_surface, nullptr);
+  ASSERT_NE(fine_surface, nullptr);
+  ExpectSurfaceInvariants(*coarse_surface, id_A, id_B);
+  ExpectSurfaceInvariants(*fine_surface, id_A, id_B);
+  EXPECT_GT(fine_surface->num_faces(), coarse_surface->num_faces());
+}
+
 GTEST_TEST(VoxelSdfContactSurfaceTest, EdgeCornerAndRotatedOverlap) {
   const VoxelSdfGeometry A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
   const VoxelSdfGeometry B(Box(2.0, 2.0, 2.0), 0.5, 100.0);
