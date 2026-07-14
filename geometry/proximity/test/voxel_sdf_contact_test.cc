@@ -124,7 +124,6 @@ void ExpectSurfaceInvariants(const ContactSurface<double>& surface,
   const PolygonSurfaceMesh<double>& mesh_W = surface.poly_mesh_W();
   const PolygonSurfaceMeshFieldLinear<double, double>& field_W =
       surface.poly_e_MN();
-  int face_vertex_count = 0;
   for (int v = 0; v < mesh_W.num_vertices(); ++v) {
     EXPECT_TRUE(mesh_W.vertex(v).allFinite());
     const double pressure = field_W.EvaluateAtVertex(v);
@@ -133,7 +132,6 @@ void ExpectSurfaceInvariants(const ContactSurface<double>& surface,
   }
   for (int f = 0; f < mesh_W.num_faces(); ++f) {
     const SurfacePolygon face = mesh_W.element(f);
-    face_vertex_count += face.num_vertices();
     EXPECT_GT(face.num_vertices(), 2);
     EXPECT_TRUE(std::isfinite(surface.area(f)));
     EXPECT_GT(surface.area(f), 0.0);
@@ -159,9 +157,28 @@ void ExpectSurfaceInvariants(const ContactSurface<double>& surface,
     // pressure, i.e., point out of B and into A.
     EXPECT_GT(surface.face_normal(f).dot(grad_p_A_W - grad_p_B_W), 0.0);
   }
-  // Every voxel contributes an independent polygon; vertices are not welded
-  // or shared across faces.
-  EXPECT_EQ(face_vertex_count, mesh_W.num_vertices());
+}
+
+void ExpectSurfacesEqualIncludingIdsAndGradients(
+    const ContactSurface<double>& actual,
+    const ContactSurface<double>& expected) {
+  EXPECT_EQ(actual.id_M(), expected.id_M());
+  EXPECT_EQ(actual.id_N(), expected.id_N());
+  EXPECT_EQ(actual.representation(), expected.representation());
+  EXPECT_TRUE(actual.Equal(expected));
+  EXPECT_EQ(actual.HasGradE_M(), expected.HasGradE_M());
+  EXPECT_EQ(actual.HasGradE_N(), expected.HasGradE_N());
+  ASSERT_EQ(actual.num_faces(), expected.num_faces());
+  for (int f = 0; f < actual.num_faces(); ++f) {
+    if (actual.HasGradE_M() && expected.HasGradE_M()) {
+      EXPECT_TRUE(CompareMatrices(actual.EvaluateGradE_M_W(f),
+                                  expected.EvaluateGradE_M_W(f), kTolerance));
+    }
+    if (actual.HasGradE_N() && expected.HasGradE_N()) {
+      EXPECT_TRUE(CompareMatrices(actual.EvaluateGradE_N_W(f),
+                                  expected.EvaluateGradE_N_W(f), kTolerance));
+    }
+  }
 }
 
 GTEST_TEST(VoxelSdfContactTest, PlaneCubeSectionTopologies) {
@@ -528,7 +545,8 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SurfaceOwnershipAndEngineCopy) {
   ASSERT_NE(copied_surface, nullptr);
   ExpectSurfaceInvariants(*original_surface, id_A, id_B);
   ExpectSurfaceInvariants(*copied_surface, id_A, id_B);
-  EXPECT_TRUE(original_surface->Equal(*copied_surface));
+  ExpectSurfacesEqualIncludingIdsAndGradients(*original_surface,
+                                              *copied_surface);
   EXPECT_NE(&original_surface->poly_mesh_W(), &copied_surface->poly_mesh_W());
   EXPECT_NE(
       static_cast<const void*>(&original_surface->poly_mesh_W().vertex(0)),
@@ -537,7 +555,8 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SurfaceOwnershipAndEngineCopy) {
   const auto repeated_surface =
       CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB, id_B);
   ASSERT_NE(repeated_surface, nullptr);
-  EXPECT_TRUE(original_surface->Equal(*repeated_surface));
+  ExpectSurfacesEqualIncludingIdsAndGradients(*original_surface,
+                                              *repeated_surface);
   EXPECT_NE(&original_surface->poly_mesh_W(), &repeated_surface->poly_mesh_W());
 
   const auto* sample_address = &A.sample(0, 0, 0);

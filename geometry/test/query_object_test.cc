@@ -319,7 +319,16 @@ TEST_F(QueryObjectTest, VoxelSdfContactUsesLivePoses) {
   const auto repeated = query_object.ComputeContactSurfaces(
       HydroelasticContactRepresentation::kPolygon);
   ASSERT_EQ(repeated.size(), 1u);
+  EXPECT_EQ(initial[0].id_M(), repeated[0].id_M());
+  EXPECT_EQ(initial[0].id_N(), repeated[0].id_N());
   EXPECT_TRUE(initial[0].Equal(repeated[0]));
+  ASSERT_EQ(initial[0].num_faces(), repeated[0].num_faces());
+  for (int f = 0; f < initial[0].num_faces(); ++f) {
+    EXPECT_TRUE(CompareMatrices(initial[0].EvaluateGradE_M_W(f),
+                                repeated[0].EvaluateGradE_M_W(f)));
+    EXPECT_TRUE(CompareMatrices(initial[0].EvaluateGradE_N_W(f),
+                                repeated[0].EvaluateGradE_N_W(f)));
+  }
   EXPECT_NE(&initial[0].poly_mesh_W(), &repeated[0].poly_mesh_W());
 
   // Invalidating the SceneGraph pose input changes the next contact surface;

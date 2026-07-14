@@ -4934,7 +4934,17 @@ GTEST_TEST(GeometryStateHydroTest, VoxelSdfContactStateLifecycle) {
     const auto copied_surfaces = copied_state.ComputeContactSurfaces(
         HydroelasticContactRepresentation::kPolygon);
     ASSERT_EQ(copied_surfaces.size(), 1u);
-    EXPECT_TRUE(initial_surface.Equal(copied_surfaces[0]));
+    const ContactSurface<double>& copied_surface = copied_surfaces[0];
+    EXPECT_EQ(initial_surface.id_M(), copied_surface.id_M());
+    EXPECT_EQ(initial_surface.id_N(), copied_surface.id_N());
+    EXPECT_TRUE(initial_surface.Equal(copied_surface));
+    ASSERT_EQ(initial_surface.num_faces(), copied_surface.num_faces());
+    for (int f = 0; f < initial_surface.num_faces(); ++f) {
+      EXPECT_TRUE(CompareMatrices(initial_surface.EvaluateGradE_M_W(f),
+                                  copied_surface.EvaluateGradE_M_W(f)));
+      EXPECT_TRUE(CompareMatrices(initial_surface.EvaluateGradE_N_W(f),
+                                  copied_surface.EvaluateGradE_N_W(f)));
+    }
 
     auto autodiff_state =
         GeometryStateTester<AutoDiffXd>::CopyGeometryState(geometry_state);

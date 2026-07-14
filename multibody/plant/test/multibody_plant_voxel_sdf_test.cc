@@ -141,6 +141,9 @@ class VoxelSdfSapTest : public ::testing::Test {
   Context<double>* plant_context_{nullptr};
 };
 
+// TODO(gnsh-a): Add an aligned-Box analytical oracle for interface
+// position, area, pressure, integrated force and torque, and one-step SAP
+// response. This test currently verifies integration, finiteness, and signs.
 TEST_F(VoxelSdfSapTest, SapConsumesVoxelSurfaceAndAdvances) {
   const ContactResults<double>& initial_results =
       EvalContactResults(*plant_context_);

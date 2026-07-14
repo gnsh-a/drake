@@ -43,7 +43,7 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
       voxel_width_(voxel_width),
       hydroelastic_modulus_(hydroelastic_modulus),
       characteristic_length_(half_widths_.minCoeff()),
-      pressure_scale_(hydroelastic_modulus / characteristic_length_) {
+      pressure_scale_(0.0) {
   if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
     throw std::logic_error(
         "The Box voxel SDF width must be finite and strictly positive");
@@ -53,12 +53,28 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
         "The Box voxel SDF hydroelastic modulus must be finite and strictly "
         "positive");
   }
+  if (!(characteristic_length_ > 0.0 &&
+        std::isfinite(characteristic_length_))) {
+    throw std::logic_error(
+        "The Box voxel SDF characteristic length must be finite and strictly "
+        "positive");
+  }
+  pressure_scale_ = hydroelastic_modulus_ / characteristic_length_;
+  if (!(pressure_scale_ > 0.0 && std::isfinite(pressure_scale_))) {
+    throw std::logic_error(
+        "The Box voxel SDF pressure scale must be finite and strictly "
+        "positive");
+  }
 
   const Vector3<double> extent = 2.0 * half_widths_;
   for (int a = 0; a < 3; ++a) {
     cell_counts_[a] = CalcCellCount(extent[a], voxel_width_, a);
     // Centering the padded grid about the Box makes its padding symmetric.
     lower_cell_boundary_[a] = -0.5 * cell_counts_[a] * voxel_width_;
+    if (!std::isfinite(lower_cell_boundary_[a])) {
+      throw std::logic_error(fmt::format(
+          "The Box voxel SDF grid boundary is not finite on axis {}", a));
+    }
   }
 
   size_t sample_count = CheckedMultiply(static_cast<size_t>(cell_counts_[0]),
@@ -83,15 +99,25 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
     for (int j = 0; j < cell_counts_[1]; ++j) {
       for (int i = 0; i < cell_counts_[0]; ++i) {
         const Vector3<double> center = cell_center(i, j, k);
+        if (!center.allFinite()) {
+          throw std::logic_error(fmt::format(
+              "The Box voxel SDF cell center ({}, {}, {}) is not finite", i, j,
+              k));
+        }
         const auto distance =
             point_distance::DistanceToPoint<double>::ComputeDistanceToBox<3>(
                 half_widths_, center);
         const Vector3<double>& nearest = std::get<0>(distance);
         const Vector3<double>& gradient = std::get<1>(distance);
+        const double phi = gradient.dot(center - nearest);
+        if (!nearest.allFinite() || !gradient.allFinite() ||
+            !std::isfinite(phi)) {
+          throw std::logic_error(fmt::format(
+              "The Box voxel SDF sample ({}, {}, {}) is not finite", i, j, k));
+        }
         // At medial-axis ties, the chosen Box gradient follows Drake's public
         // point-distance implementation.
-        samples_[linear_index(i, j, k)] =
-            SdfSample{gradient.dot(center - nearest), gradient};
+        samples_[linear_index(i, j, k)] = SdfSample{phi, gradient};
       }
     }
   }
@@ -101,11 +127,14 @@ Vector3<double> VoxelSdfGeometry::cell_center(int i, int j, int k) const {
   DRAKE_DEMAND(i >= 0 && i < cell_counts_[0]);
   DRAKE_DEMAND(j >= 0 && j < cell_counts_[1]);
   DRAKE_DEMAND(k >= 0 && k < cell_counts_[2]);
-  return lower_cell_boundary_ +
-         voxel_width_ *
-             (Vector3<double>(static_cast<double>(i), static_cast<double>(j),
-                              static_cast<double>(k)) +
-              Vector3<double>::Constant(0.5));
+  // Fused multiply-add avoids overflowing the intermediate h * (index + 0.5)
+  // when its sum with the negative lower boundary is representable.
+  return Vector3<double>(std::fma(voxel_width_, static_cast<double>(i) + 0.5,
+                                  lower_cell_boundary_[0]),
+                         std::fma(voxel_width_, static_cast<double>(j) + 0.5,
+                                  lower_cell_boundary_[1]),
+                         std::fma(voxel_width_, static_cast<double>(k) + 0.5,
+                                  lower_cell_boundary_[2]));
 }
 
 const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::sample(int i, int j,

@@ -72,19 +72,34 @@ GTEST_TEST(VoxelSdfGeometryTest, CachedSamplesMatchPointDistance) {
     }
   }
 
-  // Explicit point-distance queries exercise the same Box feature rules used
-  // when caching samples: center/medial ties, interior face regions, boundary
-  // faces/edges/corners, and exterior face/edge/corner regions.
-  for (const Vector3d& p_GQ :
-       {Vector3d(0.0, 0.0, 0.0), Vector3d(1.0, 0.0, 0.0),
-        Vector3d(2.5, 0.0, 0.0), Vector3d(2.5, 2.5, 0.0),
-        Vector3d(2.5, 2.5, 2.5), Vector3d(3.5, 0.0, 0.0),
-        Vector3d(3.5, 3.5, 0.0), Vector3d(3.5, 3.5, 3.5)}) {
+  // Cell centers are strictly inside the Box. These targeted cached samples
+  // cover interior face regions and Drake's selected gradients at medial-axis
+  // ties; boundary and exterior behavior belongs to point-distance tests.
+  struct SampleCase {
+    Vector3<int> index;
+    Vector3d center;
+    double value;
+    Vector3d gradient;
+  };
+  for (const SampleCase& test :
+       {SampleCase{{2, 2, 2}, Vector3d::Zero(), -2.5, Vector3d::UnitX()},
+        SampleCase{{4, 2, 2}, Vector3d(2, 0, 0), -0.5, Vector3d::UnitX()},
+        SampleCase{{0, 2, 2}, Vector3d(-2, 0, 0), -0.5, -Vector3d::UnitX()},
+        SampleCase{{4, 4, 2}, Vector3d(2, 2, 0), -0.5, Vector3d::UnitX()},
+        SampleCase{{4, 4, 4}, Vector3d(2, 2, 2), -0.5, Vector3d::UnitX()}}) {
+    const int i = test.index[0];
+    const int j = test.index[1];
+    const int k = test.index[2];
+    const Vector3d p_GQ = dut.cell_center(i, j, k);
+    EXPECT_TRUE(CompareMatrices(p_GQ, test.center));
     point_distance::DistanceToPoint<double> query(
         GeometryId::get_new_id(), math::RigidTransformd(), p_GQ);
-    const auto result = query(fcl_box);
-    EXPECT_TRUE(std::isfinite(result.distance));
-    EXPECT_TRUE(result.grad_W.array().isFinite().all());
+    const SignedDistanceToPoint<double> expected = query(fcl_box);
+    const auto& actual = dut.sample(i, j, k);
+    EXPECT_EQ(actual.value, test.value);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, test.gradient));
+    EXPECT_EQ(actual.value, expected.distance);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
   }
 }
 
@@ -127,6 +142,23 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
     DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(box, 1.0, bad_modulus),
                                 ".*modulus.*finite.*positive.*");
   }
+
+  const double max = std::numeric_limits<double>::max();
+  const double denorm = std::numeric_limits<double>::denorm_min();
+  DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(box, 1.0, max),
+                              ".*pressure scale.*finite.*positive.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Box(max, max, max), max, denorm),
+                              ".*pressure scale.*finite.*positive.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Box(denorm, 1.0, 1.0), 1.0, 1.0),
+                              ".*characteristic length.*finite.*positive.*");
+
+  // Fused center arithmetic keeps representable coordinates finite even when
+  // the multiplication h * (i + 0.5) would overflow before cancellation.
+  const VoxelSdfGeometry extreme(Box(max, 1.0, 1.0), 0.75 * max, 1.0);
+  EXPECT_TRUE(extreme.cell_center(0, 0, 0).allFinite());
+  EXPECT_TRUE(extreme.cell_center(1, 0, 0).allFinite());
+  EXPECT_TRUE(std::isfinite(extreme.sample(0, 0, 0).value));
+  EXPECT_TRUE(std::isfinite(extreme.sample(1, 0, 0).value));
 
   const double too_many =
       static_cast<double>(std::numeric_limits<int>::max()) + 1.0;

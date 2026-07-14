@@ -311,6 +311,28 @@ class TestScene {
   return ::testing::AssertionSuccess();
 }
 
+void ExpectVoxelSurfacesEqualIncludingIdsAndGradients(
+    const ContactSurface<double>& actual,
+    const ContactSurface<double>& expected) {
+  EXPECT_EQ(actual.id_M(), expected.id_M());
+  EXPECT_EQ(actual.id_N(), expected.id_N());
+  EXPECT_EQ(actual.representation(), expected.representation());
+  EXPECT_TRUE(actual.Equal(expected));
+  EXPECT_EQ(actual.HasGradE_M(), expected.HasGradE_M());
+  EXPECT_EQ(actual.HasGradE_N(), expected.HasGradE_N());
+  ASSERT_EQ(actual.num_faces(), expected.num_faces());
+  for (int f = 0; f < actual.num_faces(); ++f) {
+    if (actual.HasGradE_M() && expected.HasGradE_M()) {
+      EXPECT_TRUE(CompareMatrices(actual.EvaluateGradE_M_W(f),
+                                  expected.EvaluateGradE_M_W(f)));
+    }
+    if (actual.HasGradE_N() && expected.HasGradE_N()) {
+      EXPECT_TRUE(CompareMatrices(actual.EvaluateGradE_N_W(f),
+                                  expected.EvaluateGradE_N_W(f)));
+    }
+  }
+}
+
 TYPED_TEST_SUITE(DispatchRigidCompliantCalculationTests, ScalarTypes);
 
 // Test suite for exercising DispatchRigidCompliantCalculation with different
@@ -592,7 +614,7 @@ GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesCurrentPoses) {
       calculator.MaybeMakeContactSurface(voxel_B, voxel_A);
   ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
   ASSERT_NE(reversed_surface, nullptr);
-  EXPECT_TRUE(surface->Equal(*reversed_surface));
+  ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *reversed_surface);
   EXPECT_NE(&surface->poly_mesh_W(), &reversed_surface->poly_mesh_W());
 
   // The calculator aliases the pose map. A new query observes a pose change
@@ -650,20 +672,13 @@ GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesFinerGrid) {
   ASSERT_NE(surface, nullptr);
   EXPECT_EQ(surface->id_M(), coarse_id);
   EXPECT_EQ(surface->id_N(), fine_id);
-  EXPECT_TRUE(surface->Equal(*fine_surface));
-  ASSERT_EQ(surface->num_faces(), fine_surface->num_faces());
-  for (int f = 0; f < surface->num_faces(); ++f) {
-    EXPECT_TRUE(CompareMatrices(surface->EvaluateGradE_M_W(f),
-                                fine_surface->EvaluateGradE_M_W(f)));
-    EXPECT_TRUE(CompareMatrices(surface->EvaluateGradE_N_W(f),
-                                fine_surface->EvaluateGradE_N_W(f)));
-  }
+  ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *fine_surface);
 
   auto [reversed_result, reversed_surface] =
       calculator.MaybeMakeContactSurface(fine_id, coarse_id);
   ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
   ASSERT_NE(reversed_surface, nullptr);
-  EXPECT_TRUE(surface->Equal(*reversed_surface));
+  ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *reversed_surface);
 }
 
 GTEST_TEST(ContactCalculatorTest, EqualVoxelWidthsUseLowerIdGrid) {
@@ -704,7 +719,7 @@ GTEST_TEST(ContactCalculatorTest, EqualVoxelWidthsUseLowerIdGrid) {
   ASSERT_NE(surface, nullptr);
   EXPECT_EQ(surface->id_M(), lower_id);
   EXPECT_EQ(surface->id_N(), higher_id);
-  EXPECT_TRUE(surface->Equal(*lower_surface));
+  ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *lower_surface);
 }
 
 GTEST_TEST(ContactCalculatorTest, UnsupportedVoxelPairsStopBeforeMeshAccess) {
