@@ -1177,7 +1177,9 @@ drake_cc_googletest(
     deps = [
         ":geometry_frame",
         ":geometry_instance",
+        ":proximity_properties",
         ":scene_graph",
+        ":shape_specification",
         "//common/test_utilities",
     ],
 )

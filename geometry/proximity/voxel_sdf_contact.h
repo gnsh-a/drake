@@ -61,8 +61,8 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
 
  The returned surface owns its mesh, pressure field, and constituent pressure
  gradients; it retains no references to either registered representation or
- pose. This calculator is double-only and is not yet connected to SceneGraph
- contact dispatch.
+ pose. This calculator is double-only; SceneGraph dispatch supports it only for
+ polygonal contact surfaces.
 
  @returns nullptr if no A voxel produces a positive-area contact polygon.
  @pre `id_A < id_B`, so A and B retain the M and N roles, respectively, in the

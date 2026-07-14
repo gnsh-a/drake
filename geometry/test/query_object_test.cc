@@ -12,7 +12,9 @@
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/geometry_state.h"
 #include "drake/geometry/internal_frame.h"
+#include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/scene_graph.h"
+#include "drake/geometry/shape_specification.h"
 #include "drake/math/rigid_transform.h"
 
 namespace drake {
@@ -274,6 +276,59 @@ TEST_F(QueryObjectTest, CreateValidInspector) {
   // state uniquely populated above (guaranteed via the uniqueness of frame and
   // geometry identifiers).
   EXPECT_EQ(inspector.GetFrameId(geometry_id), frame_id);
+}
+
+TEST_F(QueryObjectTest, VoxelSdfContactUsesLivePoses) {
+  const SourceId source_id = scene_graph_.RegisterSource("voxel_contact");
+  const FrameId frame_id =
+      scene_graph_.RegisterFrame(source_id, GeometryFrame("dynamic_box"));
+  const Box box(2.0, 2.0, 2.0);
+  const GeometryId anchored_id = scene_graph_.RegisterAnchoredGeometry(
+      source_id, make_unique<GeometryInstance>(
+                     RigidTransformd(), make_unique<Box>(box), "anchored"));
+  const GeometryId dynamic_id = scene_graph_.RegisterGeometry(
+      source_id, frame_id,
+      make_unique<GeometryInstance>(RigidTransformd(), make_unique<Box>(box),
+                                    "dynamic"));
+  ASSERT_LT(anchored_id, dynamic_id);
+
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &properties);
+  scene_graph_.AssignRole(source_id, anchored_id, properties);
+  scene_graph_.AssignRole(source_id, dynamic_id, properties);
+  unique_ptr<Context<double>> context = scene_graph_.CreateDefaultContext();
+  const auto set_dynamic_pose = [this, source_id, frame_id,
+                                 context = context.get()](double x) {
+    FramePoseVector<double> poses{
+        {frame_id, RigidTransformd(Vector3d(x, 0.0, 0.0))}};
+    scene_graph_.get_source_pose_port(source_id).FixValue(context, poses);
+  };
+  set_dynamic_pose(1.5);
+
+  const QueryObject<double>& query_object =
+      scene_graph_.get_query_output_port().Eval<QueryObject<double>>(*context);
+  auto initial = query_object.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon);
+  ASSERT_EQ(initial.size(), 1u);
+  EXPECT_EQ(initial[0].id_M(), anchored_id);
+  EXPECT_EQ(initial[0].id_N(), dynamic_id);
+  EXPECT_FALSE(initial[0].is_triangle());
+
+  // Identical queries return equivalent values, but each result owns a fresh
+  // mesh and field rather than retaining Context or registered-geometry data.
+  const auto repeated = query_object.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon);
+  ASSERT_EQ(repeated.size(), 1u);
+  EXPECT_TRUE(initial[0].Equal(repeated[0]));
+  EXPECT_NE(&initial[0].poly_mesh_W(), &repeated[0].poly_mesh_W());
+
+  // Invalidating the SceneGraph pose input changes the next contact surface;
+  // the static registered voxel grid is not rebuilt or stored in Context.
+  set_dynamic_pose(1.2);
+  const auto moved = query_object.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon);
+  ASSERT_EQ(moved.size(), 1u);
+  EXPECT_FALSE(initial[0].Equal(moved[0]));
 }
 
 // This test confirms that the copied (aka baked) query object has its pose and

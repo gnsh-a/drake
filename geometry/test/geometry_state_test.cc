@@ -4880,6 +4880,109 @@ GTEST_TEST(GeometryStateHydroTest, VoxelSdfReplaceAndRemovalLifecycle) {
       geometry_state.maybe_get_hydroelastic_mesh(id)));
 }
 
+GTEST_TEST(GeometryStateHydroTest, VoxelSdfContactStateLifecycle) {
+  GeometryState<double> geometry_state;
+  GeometryStateTester<double> tester;
+  tester.set_state(&geometry_state);
+  const SourceId source_id = geometry_state.RegisterNewSource("voxel_contact");
+  const FrameId dynamic_frame =
+      geometry_state.RegisterFrame(source_id, GeometryFrame("dynamic"));
+  const Box box(2.0, 2.0, 2.0);
+  const GeometryId id_A = geometry_state.RegisterAnchoredGeometry(
+      source_id, make_unique<GeometryInstance>(math::RigidTransformd(),
+                                               make_unique<Box>(box), "A"));
+  const GeometryId id_B = geometry_state.RegisterGeometry(
+      source_id, dynamic_frame,
+      make_unique<GeometryInstance>(math::RigidTransformd(),
+                                    make_unique<Box>(box), "B"));
+  ASSERT_LT(id_A, id_B);
+
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &properties);
+  geometry_state.AssignRole(source_id, id_A, properties);
+  geometry_state.AssignRole(source_id, id_B, properties);
+  FramePoseVector<double> poses{
+      {dynamic_frame, RigidTransformd(Vector3d(1.5, 0.0, 0.0))}};
+  tester.SetFramePoses(source_id, poses, &tester.mutable_kinematics_data());
+  tester.FinalizePoseUpdate();
+
+  auto surfaces = geometry_state.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon);
+  ASSERT_EQ(surfaces.size(), 1u);
+  EXPECT_EQ(surfaces[0].id_M(), id_A);
+  EXPECT_EQ(surfaces[0].id_N(), id_B);
+  const ContactSurface<double> initial_surface(surfaces[0]);
+
+  {
+    // GeometryState copy and scalar conversion deeply copy the registered
+    // double-valued samples; neither operation introduces mutable shared data.
+    GeometryState<double> copied_state(geometry_state);
+    GeometryStateTester<double> copied_tester;
+    copied_tester.set_state(&copied_state);
+    const auto& original_A =
+        internal::ProximityEngineTester::hydroelastic_geometries(
+            tester.proximity_engine())
+            .compliant_geometry(id_A)
+            .voxel_sdf();
+    const auto& copied_A =
+        internal::ProximityEngineTester::hydroelastic_geometries(
+            copied_tester.proximity_engine())
+            .compliant_geometry(id_A)
+            .voxel_sdf();
+    EXPECT_NE(&original_A.sample(0, 0, 0), &copied_A.sample(0, 0, 0));
+    EXPECT_EQ(original_A.sample(0, 0, 0).value, copied_A.sample(0, 0, 0).value);
+    const auto copied_surfaces = copied_state.ComputeContactSurfaces(
+        HydroelasticContactRepresentation::kPolygon);
+    ASSERT_EQ(copied_surfaces.size(), 1u);
+    EXPECT_TRUE(initial_surface.Equal(copied_surfaces[0]));
+
+    auto autodiff_state =
+        GeometryStateTester<AutoDiffXd>::CopyGeometryState(geometry_state);
+    auto roundtrip_state =
+        GeometryStateTester<double>::CopyGeometryState(*autodiff_state);
+    GeometryStateTester<double> roundtrip_tester;
+    roundtrip_tester.set_state(roundtrip_state.get());
+    const auto& roundtrip_A =
+        internal::ProximityEngineTester::hydroelastic_geometries(
+            roundtrip_tester.proximity_engine())
+            .compliant_geometry(id_A)
+            .voxel_sdf();
+    EXPECT_NE(&original_A.sample(0, 0, 0), &roundtrip_A.sample(0, 0, 0));
+    EXPECT_EQ(original_A.sample(0, 0, 0).value,
+              roundtrip_A.sample(0, 0, 0).value);
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        autodiff_state->ComputeContactSurfaces(
+            HydroelasticContactRepresentation::kPolygon),
+        "Requested a contact surface between a pair of geometries without "
+        "hydroelastic representation.+");
+  }
+
+  ProximityProperties replacement;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 200.0, &replacement);
+  geometry_state.AssignRole(source_id, id_A, replacement, RoleAssign::kReplace);
+  surfaces = geometry_state.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon);
+  ASSERT_EQ(surfaces.size(), 1u);
+  EXPECT_FALSE(initial_surface.Equal(surfaces[0]));
+
+  // Removing the proximity role removes the geometry from proximity queries,
+  // so neither hydroelastic contact nor point fallback reports the pair.
+  EXPECT_EQ(geometry_state.RemoveRole(source_id, id_A, Role::kProximity), 1);
+  surfaces.clear();
+  vector<PenetrationAsPointPair<double>> point_pairs;
+  geometry_state.ComputeContactSurfacesWithFallback(
+      HydroelasticContactRepresentation::kPolygon, &surfaces, &point_pairs);
+  EXPECT_TRUE(surfaces.empty());
+  EXPECT_TRUE(point_pairs.empty());
+
+  geometry_state.AssignRole(source_id, id_A, properties);
+  geometry_state.RemoveGeometry(source_id, id_A);
+  EXPECT_TRUE(
+      geometry_state
+          .ComputeContactSurfaces(HydroelasticContactRepresentation::kPolygon)
+          .empty());
+}
+
 // The framework for testing the removal of roles, generally, parameterized on
 // the role type.
 class RemoveRoleTests : public GeometryStateTestBase,

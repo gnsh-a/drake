@@ -411,6 +411,78 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
             HydroelasticType::kUndefined);
 }
 
+TEST_F(ProximityEngineTests, VoxelSdfContactDispatchAndFallback) {
+  const Box box(2.0, 2.0, 2.0);
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &properties);
+  const GeometryId id_A = AddDynamic(box, Vector3d::Zero(), properties);
+  const GeometryId id_B = AddDynamic(box, Vector3d(1.5, 0.0, 0.0), properties);
+  ASSERT_LT(id_A, id_B);
+
+  engine_.UpdateWorldPoses(X_WGs_);
+  vector<ContactSurface<double>> surfaces = engine_.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon, X_WGs_);
+  ASSERT_EQ(surfaces.size(), 1u);
+  EXPECT_EQ(surfaces[0].id_M(), id_A);
+  EXPECT_EQ(surfaces[0].id_N(), id_B);
+  EXPECT_FALSE(surfaces[0].is_triangle());
+  const ContactSurface<double> initial_surface(surfaces[0]);
+
+  // Property replacement rebuilds the registered grid and the next query
+  // immediately uses the replacement representation.
+  ProximityProperties replacement;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 200.0, &replacement);
+  const InternalGeometry geometry(
+      SourceId::get_new_id(), std::make_unique<Box>(box), FrameId::get_new_id(),
+      id_A, "voxel_A", math::RigidTransformd());
+  engine_.UpdateRepresentationForNewProperties(geometry, replacement);
+  surfaces = engine_.ComputeContactSurfaces(
+      HydroelasticContactRepresentation::kPolygon, X_WGs_);
+  ASSERT_EQ(surfaces.size(), 1u);
+  EXPECT_FALSE(initial_surface.Equal(surfaces[0]));
+
+  // The broad phase eliminates a clearly separated supported pair.
+  X_WGs_.at(id_B) = RigidTransformd(Vector3d(3.0, 0.0, 0.0));
+  engine_.UpdateWorldPoses(X_WGs_);
+  EXPECT_TRUE(engine_
+                  .ComputeContactSurfaces(
+                      HydroelasticContactRepresentation::kPolygon, X_WGs_)
+                  .empty());
+
+  X_WGs_.at(id_B) = RigidTransformd(Vector3d(1.5, 0.0, 0.0));
+  engine_.UpdateWorldPoses(X_WGs_);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      engine_.ComputeContactSurfaces(
+          HydroelasticContactRepresentation::kTriangle, X_WGs_),
+      "Requested a contact surface between a pair of geometries without "
+      "hydroelastic representation.+");
+
+  vector<PenetrationAsPointPair<double>> point_pairs;
+  surfaces.clear();
+  engine_.ComputeContactSurfacesWithFallback(
+      HydroelasticContactRepresentation::kTriangle, X_WGs_, &surfaces,
+      &point_pairs);
+  EXPECT_TRUE(surfaces.empty());
+  ASSERT_EQ(point_pairs.size(), 1u);
+  EXPECT_EQ(point_pairs[0].id_A, id_A);
+  EXPECT_EQ(point_pairs[0].id_B, id_B);
+
+  // Scalar conversion preserves the static grids, but voxel contact remains
+  // deliberately unsupported for AutoDiff. It reaches the existing
+  // hydroelastic-only diagnostic without instantiating the double calculator.
+  const auto ad_engine = engine_.ToScalarType<AutoDiffXd>();
+  unordered_map<GeometryId, RigidTransform<AutoDiffXd>> X_WGs_ad;
+  for (const auto& [id, X_WG] : X_WGs_) {
+    X_WGs_ad.emplace(id, X_WG.cast<AutoDiffXd>());
+  }
+  ad_engine->UpdateWorldPoses(X_WGs_ad);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      ad_engine->ComputeContactSurfaces(
+          HydroelasticContactRepresentation::kPolygon, X_WGs_ad),
+      "Requested a contact surface between a pair of geometries without "
+      "hydroelastic representation.+");
+}
+
 // When compliant hydroelastic geometries have a positive margin value,
 // ProximityEngine must inflate the AABB that fcl uses. This test confirms that
 // inflations happen as expected. Our expectations are as follows:

@@ -560,7 +560,57 @@ TYPED_TEST(MaybeMakeContactSurfaceTests, UndefinedGeometry) {
   }
 }
 
-GTEST_TEST(ContactCalculatorTest, VoxelPairsAreUnsupported) {
+GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesCurrentPoses) {
+  Geometries geometries;
+  unordered_map<GeometryId, RigidTransform<double>> X_WGs;
+
+  ProximityProperties voxel_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &voxel_properties);
+  const GeometryId voxel_A = GeometryId::get_new_id();
+  const GeometryId voxel_B = GeometryId::get_new_id();
+  ASSERT_LT(voxel_A, voxel_B);
+  const Box box(2.0, 2.0, 2.0);
+  geometries.MaybeAddGeometry(box, voxel_A, voxel_properties);
+  geometries.MaybeAddGeometry(box, voxel_B, voxel_properties);
+  X_WGs.emplace(voxel_A, RigidTransform<double>());
+  X_WGs.emplace(voxel_B, RigidTransform<double>(Vector3d(1.5, 0.0, 0.0)));
+
+  ContactCalculator<double> calculator(
+      &X_WGs, &geometries, HydroelasticContactRepresentation::kPolygon);
+  auto [result, surface] = calculator.MaybeMakeContactSurface(voxel_A, voxel_B);
+  ASSERT_EQ(result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(surface, nullptr);
+  EXPECT_EQ(surface->id_M(), voxel_A);
+  EXPECT_EQ(surface->id_N(), voxel_B);
+  EXPECT_FALSE(surface->is_triangle());
+
+  // Pair order is immaterial; the lower id always supplies the traversed grid.
+  auto [reversed_result, reversed_surface] =
+      calculator.MaybeMakeContactSurface(voxel_B, voxel_A);
+  ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(reversed_surface, nullptr);
+  EXPECT_TRUE(surface->Equal(*reversed_surface));
+  EXPECT_NE(&surface->poly_mesh_W(), &reversed_surface->poly_mesh_W());
+
+  // The calculator aliases the pose map. A new query observes a pose change
+  // without rebuilding either registered voxel representation.
+  X_WGs.at(voxel_B) = RigidTransform<double>(Vector3d(1.2, 0.0, 0.0));
+  auto [moved_result, moved_surface] =
+      calculator.MaybeMakeContactSurface(voxel_A, voxel_B);
+  ASSERT_EQ(moved_result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(moved_surface, nullptr);
+  EXPECT_FALSE(surface->Equal(*moved_surface));
+
+  // A supported but separated pair is a successful calculation with no
+  // contact surface.
+  X_WGs.at(voxel_B) = RigidTransform<double>(Vector3d(3.0, 0.0, 0.0));
+  auto [separated_result, separated_surface] =
+      calculator.MaybeMakeContactSurface(voxel_A, voxel_B);
+  EXPECT_EQ(separated_result, ContactSurfaceResult::kCalculated);
+  EXPECT_EQ(separated_surface, nullptr);
+}
+
+GTEST_TEST(ContactCalculatorTest, UnsupportedVoxelPairsStopBeforeMeshAccess) {
   Geometries geometries;
   unordered_map<GeometryId, RigidTransform<double>> X_WGs;
 
@@ -602,6 +652,32 @@ GTEST_TEST(ContactCalculatorTest, VoxelPairsAreUnsupported) {
     EXPECT_EQ(result, ContactSurfaceResult::kUnsupported);
     EXPECT_EQ(surface, nullptr);
   }
+
+  // Polygon output supports only voxel-voxel. Mixed pairs retain the same
+  // unsupported result and cannot fall through to a mesh-only accessor.
+  ContactCalculator<double> polygon_calculator(
+      &X_WGs, &geometries, HydroelasticContactRepresentation::kPolygon);
+  for (const auto& [id_A, id_B] :
+       {std::pair(voxel_A, rigid_mesh), std::pair(rigid_mesh, voxel_A),
+        std::pair(voxel_A, rigid_half_space),
+        std::pair(voxel_A, compliant_mesh), std::pair(compliant_mesh, voxel_A),
+        std::pair(voxel_A, compliant_half_space)}) {
+    auto [result, surface] =
+        polygon_calculator.MaybeMakeContactSurface(id_A, id_B);
+    EXPECT_EQ(result, ContactSurfaceResult::kUnsupported);
+    EXPECT_EQ(surface, nullptr);
+  }
+
+  unordered_map<GeometryId, RigidTransform<AutoDiffXd>> X_WGs_ad;
+  for (const auto& [id, X_WG] : X_WGs) {
+    X_WGs_ad.emplace(id, X_WG.cast<AutoDiffXd>());
+  }
+  ContactCalculator<AutoDiffXd> autodiff_calculator(
+      &X_WGs_ad, &geometries, HydroelasticContactRepresentation::kPolygon);
+  auto [autodiff_result, autodiff_surface] =
+      autodiff_calculator.MaybeMakeContactSurface(voxel_A, voxel_B);
+  EXPECT_EQ(autodiff_result, ContactSurfaceResult::kUnsupported);
+  EXPECT_EQ(autodiff_surface, nullptr);
 }
 
 // Confirms that rigid-rigid contact can't be evaluated.

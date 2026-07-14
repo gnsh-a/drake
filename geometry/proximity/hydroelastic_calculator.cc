@@ -1,5 +1,6 @@
 #include "drake/geometry/proximity/hydroelastic_calculator.h"
 
+#include <type_traits>
 #include <utility>
 
 #include <fmt/format.h>
@@ -10,6 +11,7 @@
 #include "drake/geometry/proximity/mesh_intersection.h"
 #include "drake/geometry/proximity/mesh_plane_intersection.h"
 #include "drake/geometry/proximity/proximity_utilities.h"
+#include "drake/geometry/proximity/voxel_sdf_contact.h"
 
 namespace drake {
 namespace geometry {
@@ -112,8 +114,22 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
     const CompliantGeometry& compliant_A = geometries_.compliant_geometry(id_A);
     const CompliantGeometry& compliant_B = geometries_.compliant_geometry(id_B);
 
-    // Voxel contact is deliberately unsupported until its contact algorithm
-    // is implemented; stop here before any mesh-only accessor can be reached.
+    // The voxel calculator is double-only and currently produces polygonal
+    // surfaces. Read the current poses from the aliased map on every query;
+    // registered voxel data never contains posed or world-space data.
+    if constexpr (std::is_same_v<T, double>) {
+      if (representation_ == HydroelasticContactRepresentation::kPolygon &&
+          compliant_A.is_voxel_sdf() && compliant_B.is_voxel_sdf()) {
+        std::unique_ptr<ContactSurface<double>> surface =
+            CalcVoxelSdfCompliantContact(
+                compliant_A.voxel_sdf(), X_WGs_.at(id_A), id_A,
+                compliant_B.voxel_sdf(), X_WGs_.at(id_B), id_B);
+        return {ContactSurfaceResult::kCalculated, std::move(surface)};
+      }
+    }
+
+    // All other voxel pairs remain unsupported. Stop before any mesh-only or
+    // half-space-only accessor can be reached.
     if (compliant_A.is_voxel_sdf() || compliant_B.is_voxel_sdf()) {
       return {ContactSurfaceResult::kUnsupported, nullptr};
     }
@@ -148,8 +164,8 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
   const CompliantGeometry& compliant = geometries_.compliant_geometry(id_S);
   const RigidGeometry& rigid = geometries_.rigid_geometry(id_R);
 
-  // Voxel contact is deliberately unsupported until its contact algorithm
-  // is implemented; stop here before any mesh-only accessor can be reached.
+  // Rigid-voxel contact remains unsupported; stop here before any mesh-only
+  // accessor can be reached.
   if (compliant.is_voxel_sdf()) {
     return {ContactSurfaceResult::kUnsupported, nullptr};
   }

@@ -37,9 +37,8 @@ std::unique_ptr<ContactSurface<T>> CalcCompliantCompliant(
 
 /* Enumerate the various results of attempting to make a contact surface. */
 enum class ContactSurfaceResult {
-  /* Computation was successful; either there was no contact (at least one
-   geometry was considered vanished), or else the contact surface is guaranteed
-   to have at least one face. See also
+  /* Computation was successful; either there was no contact, or else the
+   contact surface is guaranteed to have at least one face. See also
    `geometry::internal::hydroelastic::Geometries::is_vanished()`. */
   kCalculated,
 
