@@ -1,5 +1,7 @@
 #include "drake/geometry/proximity_properties.h"
 
+#include <limits>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -14,6 +16,7 @@ namespace {
 
 using internal::HydroelasticType;
 using internal::kComplianceType;
+using internal::kCompliantRepresentation;
 using internal::kElastic;
 using internal::kFriction;
 using internal::kHcDissipation;
@@ -149,6 +152,50 @@ GTEST_TEST(ProximityPropertiesTest, AddCompliantProperties) {
                                  AddCompliantHydroelasticProperties(1., modulus,
                                                                     p);
                                });
+}
+
+GTEST_TEST(ProximityPropertiesTest, AddCompliantVoxelSdfProperties) {
+  const double voxel_width = 0.125;
+  const double modulus = 1.5e8;
+  ProximityProperties props;
+  AddCompliantHydroelasticVoxelSdfProperties(voxel_width, modulus, &props);
+  EXPECT_EQ(props.GetProperty<double>(kHydroGroup, kRezHint), voxel_width);
+  EXPECT_EQ(props.GetProperty<double>(kHydroGroup, kElastic), modulus);
+  EXPECT_EQ(props.GetProperty<HydroelasticType>(kHydroGroup, kComplianceType),
+            HydroelasticType::kCompliant);
+  EXPECT_EQ(
+      props.GetProperty<std::string>(kHydroGroup, kCompliantRepresentation),
+      "voxel_sdf");
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      AddCompliantHydroelasticVoxelSdfProperties(voxel_width, modulus, &props),
+      ".*Trying to add property.*name already exists.*");
+}
+
+GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double infinity = std::numeric_limits<double>::infinity();
+  auto expect_unchanged = [](const ProximityProperties& props) {
+    EXPECT_FALSE(props.HasProperty(kHydroGroup, kRezHint));
+    EXPECT_FALSE(props.HasProperty(kHydroGroup, kElastic));
+    EXPECT_FALSE(props.HasProperty(kHydroGroup, kComplianceType));
+    EXPECT_FALSE(props.HasProperty(kHydroGroup, kCompliantRepresentation));
+  };
+
+  for (double bad_width : {0.0, -1.0, nan, infinity}) {
+    ProximityProperties props;
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        AddCompliantHydroelasticVoxelSdfProperties(bad_width, 1.0, &props),
+        ".*voxel width.*finite.*positive.*");
+    expect_unchanged(props);
+  }
+  for (double bad_modulus : {0.0, -1.0, nan, infinity}) {
+    ProximityProperties props;
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        AddCompliantHydroelasticVoxelSdfProperties(1.0, bad_modulus, &props),
+        ".*modulus.*finite.*positive.*");
+    expect_unchanged(props);
+  }
 }
 
 // Tests the variant where the static pressure field is defined by the

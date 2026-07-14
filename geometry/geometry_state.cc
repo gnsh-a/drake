@@ -717,7 +717,7 @@ GeometryState<T>::maybe_get_hydroelastic_mesh(GeometryId geometry_id) const {
     }
     case HydroelasticType::kCompliant: {
       const auto& compliant = hydro_geometries.compliant_geometry(geometry_id);
-      if (!compliant.is_half_space()) {
+      if (compliant.is_mesh()) {
         return &compliant.mesh();
       }
       break;

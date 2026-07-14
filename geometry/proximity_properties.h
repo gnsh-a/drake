@@ -70,6 +70,9 @@ extern const char* const kComplianceType;  ///< Compliance type property name.
 extern const char* const kSlabThickness;   ///< Slab thickness property name
                                            ///< (for half spaces).
 extern const char* const kMargin;          ///< Margin for hydroelastic contact.
+extern const char* const
+    kCompliantRepresentation;  ///< Compliant representation
+                               ///< selector property name.
 
 //@}
 
@@ -160,6 +163,20 @@ void AddRigidHydroelasticProperties(ProximityProperties* properties);
 void AddCompliantHydroelasticProperties(double resolution_hint,
                                         double hydroelastic_modulus,
                                         ProximityProperties* properties);
+
+/** Adds properties that opt a Box into the voxel signed-distance-field
+ compliant hydroelastic representation.
+
+ @param voxel_width          The width of each cubic voxel, in meters.
+ @param hydroelastic_modulus A multiplier that maps penetration to pressure.
+ @param[in,out] properties   The properties will be added to this property set.
+ @throws std::exception      If either numeric parameter is not finite and
+                             strictly positive, or if `properties` already has
+                             a property this function would add.
+ @pre `properties` is not nullptr. */
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    ProximityProperties* properties);
 
 /** Compliant half spaces are handled as a special case; they do not get
  tessellated. Instead, they are treated as infinite slabs with a finite

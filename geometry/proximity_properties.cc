@@ -1,6 +1,7 @@
 #include "drake/geometry/proximity_properties.h"
 
 #include <array>
+#include <cmath>
 #include <string>
 
 namespace drake {
@@ -19,6 +20,7 @@ const char* const kRezHint = "resolution_hint";
 const char* const kComplianceType = "compliance_type";
 const char* const kSlabThickness = "slab_thickness";
 const char* const kMargin = "margin";
+const char* const kCompliantRepresentation = "compliant_representation";
 
 namespace {
 
@@ -157,6 +159,34 @@ void AddCompliantHydroelasticProperties(double resolution_hint,
   properties->AddProperty(internal::kHydroGroup, internal::kRezHint,
                           resolution_hint);
   AddCompliantHydroelasticProperties(hydroelastic_modulus, properties);
+}
+
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    ProximityProperties* properties) {
+  DRAKE_DEMAND(properties != nullptr);
+  // Validate everything up front so invalid inputs never partially modify the
+  // caller's property set.
+  if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
+    throw std::logic_error(fmt::format(
+        "The voxel width must be finite and strictly positive; given {}",
+        voxel_width));
+  }
+  if (!(hydroelastic_modulus > 0.0 && std::isfinite(hydroelastic_modulus))) {
+    throw std::logic_error(fmt::format(
+        "The hydroelastic modulus must be finite and strictly positive; given "
+        "{}",
+        hydroelastic_modulus));
+  }
+  properties->AddProperty(internal::kHydroGroup, internal::kRezHint,
+                          voxel_width);
+  properties->AddProperty(internal::kHydroGroup, internal::kElastic,
+                          hydroelastic_modulus);
+  properties->AddProperty(internal::kHydroGroup, internal::kComplianceType,
+                          internal::HydroelasticType::kCompliant);
+  properties->AddProperty(internal::kHydroGroup,
+                          internal::kCompliantRepresentation,
+                          std::string("voxel_sdf"));
 }
 
 void AddCompliantHydroelasticPropertiesForHalfSpace(

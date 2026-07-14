@@ -279,6 +279,11 @@ GTEST_TEST(RigidGeometryTest, MakeMeshRepresentation) {
   props.AddProperty("hydroelastic", "slab_thickness", 0.1);
   const HalfSpace half_space;
   EXPECT_FALSE(MakeMeshRepresentation(half_space, props).has_value());
+
+  ProximityProperties voxel_props;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 1234.5, &voxel_props);
+  EXPECT_FALSE(
+      MakeMeshRepresentation(Box::MakeCube(1.0), voxel_props).has_value());
 }
 
 }  // namespace

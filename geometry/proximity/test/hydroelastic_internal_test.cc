@@ -415,6 +415,70 @@ GTEST_TEST(Hydroelastic, GeometriesPopulationAndQuery) {
   DRAKE_EXPECT_NO_THROW(geometries.rigid_geometry(rigid_id));
 }
 
+GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
+  const Box box(2.0, 3.0, 4.0);
+  ProximityProperties voxel_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &voxel_properties);
+
+  Geometries geometries;
+  const GeometryId voxel_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(box, voxel_id, voxel_properties);
+  ASSERT_EQ(geometries.hydroelastic_type(voxel_id),
+            HydroelasticType::kCompliant);
+  const CompliantGeometry& voxel = geometries.compliant_geometry(voxel_id);
+  EXPECT_TRUE(voxel.is_voxel_sdf());
+  EXPECT_FALSE(voxel.is_mesh());
+  EXPECT_FALSE(voxel.is_half_space());
+  EXPECT_EQ(voxel.voxel_sdf().voxel_width(), 0.5);
+  EXPECT_EQ(voxel.voxel_sdf().hydroelastic_modulus(), 2e8);
+  DRAKE_EXPECT_THROWS_MESSAGE(voxel.compliant_mesh(), ".*voxel SDF.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(voxel.mesh(), ".*voxel SDF.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(voxel.pressure_field(), ".*voxel SDF.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(voxel.bvh(), ".*voxel SDF.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(voxel.compliant_half_space(), ".*voxel SDF.*");
+
+  Geometries copy(geometries);
+  const VoxelSdfGeometry& copied =
+      copy.compliant_geometry(voxel_id).voxel_sdf();
+  EXPECT_NE(&copied.sample(0, 0, 0), &voxel.voxel_sdf().sample(0, 0, 0));
+  EXPECT_EQ(copied.sample(0, 0, 0).value,
+            voxel.voxel_sdf().sample(0, 0, 0).value);
+  copy.RemoveGeometry(voxel_id);
+  EXPECT_EQ(copy.hydroelastic_type(voxel_id), HydroelasticType::kUndefined);
+  EXPECT_EQ(geometries.hydroelastic_type(voxel_id),
+            HydroelasticType::kCompliant);
+
+  // Without the selector, Box keeps its legacy compliant mesh.
+  ProximityProperties mesh_properties;
+  AddCompliantHydroelasticProperties(0.5, 2e8, &mesh_properties);
+  const GeometryId mesh_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(box, mesh_id, mesh_properties);
+  EXPECT_TRUE(geometries.compliant_geometry(mesh_id).is_mesh());
+  EXPECT_FALSE(geometries.compliant_geometry(mesh_id).is_voxel_sdf());
+
+  ProximityProperties unknown(voxel_properties);
+  unknown.UpdateProperty(kHydroGroup, kCompliantRepresentation,
+                         std::string("not_a_representation"));
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(box, GeometryId::get_new_id(), unknown),
+      ".*Unknown compliant hydroelastic "
+      "representation.*not_a_representation.*");
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(Sphere(1.0), GeometryId::get_new_id(),
+                                  voxel_properties),
+      ".*only supported for Box.*Sphere.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      MakeCompliantRepresentation(Sphere(1.0), voxel_properties),
+      ".*only supported for Box.*Sphere.*");
+
+  ProximityProperties with_margin(voxel_properties);
+  with_margin.AddProperty(kHydroGroup, kMargin, 0.01);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(box, GeometryId::get_new_id(), with_margin),
+      ".*voxel SDF.*requires zero margin.*");
+}
+
 void DoTestVanished(const Shape& shape, bool expect_vanished) {
   SCOPED_TRACE(fmt::format("DoTestVanished: {}, expect_vanished: {}",
                            shape.to_string(), expect_vanished));

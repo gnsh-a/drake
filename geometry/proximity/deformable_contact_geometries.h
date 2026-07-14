@@ -169,11 +169,11 @@ std::optional<RigidGeometry> MakeMeshRepresentation(
       compliant_hydro_geometry =
           internal::hydroelastic::MakeCompliantRepresentation(shape, props);
   // TODO(xuchenhan-tri): Support half space.
-  if (!compliant_hydro_geometry || compliant_hydro_geometry->is_half_space()) {
+  if (!compliant_hydro_geometry || !compliant_hydro_geometry->is_mesh()) {
     return {};
   }
-  /* hydroelastic::CompliantGeometry is documented as having a mesh or having a
-   half space. We've excluded the latter, so we know we have a mesh. */
+  /* Only hydroelastic compliant meshes can supply this representation; half
+   spaces and voxel SDFs have no mesh to copy. */
   // TODO(xuchenhan-tri): consider allowing CompliantMesh to release its mesh to
   // prevent copying here.
   auto mesh =

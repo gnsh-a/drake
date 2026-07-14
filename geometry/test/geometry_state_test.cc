@@ -4751,6 +4751,7 @@ TEST_F(ApplyProximityDefaultsTests, MultipleGeometries) {
 //   Case: id has surface mesh.
 //   Case: id has volume mesh.
 //   Case: id is half space (has hydro representation, but not a mesh)
+//   Case: id has a voxel SDF representation (also not a mesh)
 GTEST_TEST(GeometryStateHydroTest, GetHydroMesh) {
   GeometryState<double> geometry_state;
   const SourceId source_id = geometry_state.RegisterNewSource("hydro_test");
@@ -4760,6 +4761,8 @@ GTEST_TEST(GeometryStateHydroTest, GetHydroMesh) {
   ProximityProperties compliant_hydro;
   AddContactMaterial(0.0, {}, {}, &compliant_hydro);
   AddCompliantHydroelasticProperties(1.0, 1e8, &compliant_hydro);
+  ProximityProperties voxel_hydro;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 1e8, &voxel_hydro);
 
   // We'll simply affix a number of geometries as anchored with the identity
   // pose. The other details don't really matter.
@@ -4830,6 +4833,51 @@ GTEST_TEST(GeometryStateHydroTest, GetHydroMesh) {
     const auto maybe_mesh = geometry_state.maybe_get_hydroelastic_mesh(id);
     EXPECT_TRUE(std::holds_alternative<std::monostate>(maybe_mesh));
   }
+
+  // Case: id has a voxel SDF representation (but not a hydroelastic mesh).
+  {
+    const GeometryId id = geometry_state.RegisterAnchoredGeometry(
+        source_id, make_unique<GeometryInstance>(
+                       X_WG, make_unique<Box>(1, 2, 3), "voxel_sdf"));
+    geometry_state.AssignRole(source_id, id, voxel_hydro);
+
+    const auto maybe_mesh = geometry_state.maybe_get_hydroelastic_mesh(id);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(maybe_mesh));
+  }
+}
+
+GTEST_TEST(GeometryStateHydroTest, VoxelSdfReplaceAndRemovalLifecycle) {
+  GeometryState<double> geometry_state;
+  const SourceId source_id = geometry_state.RegisterNewSource("voxel_test");
+  const GeometryId id = geometry_state.RegisterAnchoredGeometry(
+      source_id,
+      make_unique<GeometryInstance>(math::RigidTransformd(),
+                                    make_unique<Box>(1.0, 2.0, 3.0), "voxel"));
+
+  ProximityProperties initial;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 1e8, &initial);
+  geometry_state.AssignRole(source_id, id, initial);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      geometry_state.maybe_get_hydroelastic_mesh(id)));
+
+  ProximityProperties replacement;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &replacement);
+  geometry_state.AssignRole(source_id, id, replacement, RoleAssign::kReplace);
+  const ProximityProperties* stored = geometry_state.GetProximityProperties(id);
+  ASSERT_NE(stored, nullptr);
+  EXPECT_EQ(stored->GetProperty<double>(kHydroGroup, kRezHint), 0.5);
+  EXPECT_EQ(stored->GetProperty<double>(kHydroGroup, kElastic), 2e8);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      geometry_state.maybe_get_hydroelastic_mesh(id)));
+
+  EXPECT_EQ(geometry_state.RemoveRole(source_id, id, Role::kProximity), 1);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      geometry_state.maybe_get_hydroelastic_mesh(id)));
+
+  geometry_state.AssignRole(source_id, id, initial);
+  geometry_state.RemoveGeometry(source_id, id);
+  EXPECT_TRUE(std::holds_alternative<std::monostate>(
+      geometry_state.maybe_get_hydroelastic_mesh(id)));
 }
 
 // The framework for testing the removal of roles, generally, parameterized on

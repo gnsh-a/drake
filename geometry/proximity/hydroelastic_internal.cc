@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <fmt/format.h>
@@ -85,6 +86,26 @@ bool is_primitive(const Shape& shape) {
   IsPrimitiveChecker checker;
   shape.Reify(&checker, &result);
   return result;
+}
+
+void ValidateCompliantRepresentationSelector(const ProximityProperties& props,
+                                             std::string_view shape_name,
+                                             bool supports_voxel_sdf) {
+  if (!props.HasProperty(kHydroGroup, kCompliantRepresentation)) {
+    return;
+  }
+  const std::string& selector =
+      props.GetProperty<std::string>(kHydroGroup, kCompliantRepresentation);
+  if (selector != "voxel_sdf") {
+    throw std::logic_error(fmt::format(
+        "Unknown compliant hydroelastic representation '{}'", selector));
+  }
+  if (!supports_voxel_sdf) {
+    throw std::logic_error(fmt::format(
+        "The '{}' compliant hydroelastic representation is only supported for "
+        "Box; cannot create it for {}",
+        selector, shape_name));
+  }
 }
 
 }  // namespace
@@ -194,9 +215,11 @@ void Geometries::MakeShape(const ShapeType& shape, const ReifyData& data) {
       if (hydro_geometry) AddGeometry(data.id, std::move(*hydro_geometry));
     } break;
     case HydroelasticType::kCompliant: {
+      ValidateCompliantRepresentationSelector(
+          data.properties, shape.type_name(), std::is_same_v<ShapeType, Box>);
       auto hydro_geometry = MakeCompliantRepresentation(shape, data.properties);
       if (hydro_geometry) {
-        if (is_primitive(shape) &&
+        if (hydro_geometry->is_mesh() && is_primitive(shape) &&
             hydro_geometry->pressure_field().is_gradient_field_degenerate()) {
           vanished_geometries_.insert(data.id);
         } else {
@@ -411,6 +434,7 @@ void WarnNoCompliantRepresentation(std::string_view shape_type_name) {
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Sphere& sphere, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, sphere.type_name(), false);
   const double margin = NonNegativeDouble("Sphere", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
   const Sphere inflated_sphere(sphere.radius() + margin);
@@ -439,8 +463,22 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Box& box, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, box.type_name(), true);
   const double margin = NonNegativeDouble("Box", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
+
+  if (props.HasProperty(kHydroGroup, kCompliantRepresentation)) {
+    if (margin != 0.0) {
+      throw std::logic_error(
+          "The Box voxel SDF compliant representation requires zero margin");
+    }
+    PositiveDouble validator("Box voxel SDF", "compliant");
+    const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
+    const double hydroelastic_modulus =
+        validator.Extract(props, kHydroGroup, kElastic);
+    return CompliantGeometry(
+        VoxelSdfGeometry(box, voxel_width, hydroelastic_modulus));
+  }
 
   // Define the shape of the "inflated" hydroelastic geometry to include the
   // margin. We inflate all faces of the box a distance "margin" along the
@@ -464,6 +502,7 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Cylinder& cylinder, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, cylinder.type_name(), false);
   const double margin = NonNegativeDouble("Cylinder", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
   const Cylinder inflated_cylinder(cylinder.radius() + margin,
@@ -487,6 +526,7 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Capsule& capsule, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, capsule.type_name(), false);
   const double margin = NonNegativeDouble("Capsule", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
   const Capsule inflated_capsule(capsule.radius() + margin, capsule.length());
@@ -509,6 +549,7 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Ellipsoid& ellipsoid, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, ellipsoid.type_name(), false);
   // If nothing is said, let's go for the *cheap* tessellation strategy.
   const TessellationStrategy strategy =
       props.GetPropertyOrDefault(kHydroGroup, "tessellation_strategy",
@@ -537,6 +578,7 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const HalfSpace&, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, "HalfSpace", false);
   PositiveDouble positive_validator("HalfSpace", "compliant");
 
   const double thickness =
@@ -554,6 +596,8 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Convex& convex_spec, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, convex_spec.type_name(),
+                                          false);
   const double margin = NonNegativeDouble("Convex", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
   // For zero margin, use the pre-computed convex hull for the shape.
@@ -579,6 +623,7 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Mesh& mesh_spec, const ProximityProperties& props) {
+  ValidateCompliantRepresentationSelector(props, mesh_spec.type_name(), false);
   const double hydroelastic_modulus =
       PositiveDouble("Mesh", "compliant").Extract(props, kHydroGroup, kElastic);
 

@@ -79,6 +79,12 @@ class ProximityEngineTester {
   }
 
   template <typename T>
+  static const hydroelastic::CompliantGeometry& compliant_geometry(
+      GeometryId id, const ProximityEngine<T>& engine) {
+    return engine.hydroelastic_geometries().compliant_geometry(id);
+  }
+
+  template <typename T>
   static bool IsFclConvexType(const ProximityEngine<T>& engine, GeometryId id) {
     return engine.IsFclConvexType(id);
   }
@@ -362,6 +368,47 @@ TEST_F(ProximityEngineTests, ProcessHydroelasticProperties) {
           edge_length},
       {}, rigid_properties);
   EXPECT_EQ(Tester::hydroelastic_type(rigid_convex_vtk_id, engine_), kRigid);
+}
+
+TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
+  const Box box(1.0, 2.0, 3.0);
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 1e8, &properties);
+  const GeometryId id = AddDynamic(box, {}, properties);
+
+  const auto& original = Tester::compliant_geometry(id, engine_).voxel_sdf();
+  ASSERT_EQ(original.voxel_width(), 0.25);
+  const Vector3<int> original_counts = original.cell_counts();
+
+  ProximityEngine<double> copy(engine_);
+  const auto& copied = Tester::compliant_geometry(id, copy).voxel_sdf();
+  EXPECT_NE(&copied.sample(0, 0, 0), &original.sample(0, 0, 0));
+  EXPECT_EQ(copied.sample(0, 0, 0).value, original.sample(0, 0, 0).value);
+
+  std::unique_ptr<ProximityEngine<AutoDiffXd>> converted =
+      engine_.ToScalarType<AutoDiffXd>();
+  const auto& converted_voxel =
+      Tester::compliant_geometry(id, *converted).voxel_sdf();
+  EXPECT_NE(&converted_voxel.sample(0, 0, 0), &original.sample(0, 0, 0));
+  EXPECT_TRUE(
+      CompareMatrices(converted_voxel.cell_counts(), original.cell_counts()));
+  EXPECT_EQ(converted_voxel.sample(0, 0, 0).value,
+            original.sample(0, 0, 0).value);
+
+  ProximityProperties replacement;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &replacement);
+  const InternalGeometry geometry(
+      SourceId::get_new_id(), std::make_unique<Box>(box), FrameId::get_new_id(),
+      id, "voxel", math::RigidTransformd());
+  engine_.UpdateRepresentationForNewProperties(geometry, replacement);
+  const auto& replaced = Tester::compliant_geometry(id, engine_).voxel_sdf();
+  EXPECT_EQ(replaced.voxel_width(), 0.5);
+  EXPECT_EQ(replaced.hydroelastic_modulus(), 2e8);
+  EXPECT_FALSE(CompareMatrices(replaced.cell_counts(), original_counts));
+
+  engine_.RemoveGeometry(id, true);
+  EXPECT_EQ(Tester::hydroelastic_type(id, engine_),
+            HydroelasticType::kUndefined);
 }
 
 // When compliant hydroelastic geometries have a positive margin value,

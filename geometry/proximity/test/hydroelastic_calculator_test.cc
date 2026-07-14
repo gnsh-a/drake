@@ -560,6 +560,50 @@ TYPED_TEST(MaybeMakeContactSurfaceTests, UndefinedGeometry) {
   }
 }
 
+GTEST_TEST(ContactCalculatorTest, VoxelPairsAreUnsupported) {
+  Geometries geometries;
+  unordered_map<GeometryId, RigidTransform<double>> X_WGs;
+
+  ProximityProperties voxel_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 1e8, &voxel_properties);
+  ProximityProperties compliant_mesh_properties = compliant_properties();
+  ProximityProperties rigid_mesh_properties = rigid_properties();
+
+  const GeometryId voxel_A = GeometryId::get_new_id();
+  const GeometryId voxel_B = GeometryId::get_new_id();
+  const GeometryId compliant_mesh = GeometryId::get_new_id();
+  const GeometryId compliant_half_space = GeometryId::get_new_id();
+  const GeometryId rigid_mesh = GeometryId::get_new_id();
+  const GeometryId rigid_half_space = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(Box(1.0, 1.0, 1.0), voxel_A, voxel_properties);
+  geometries.MaybeAddGeometry(Box(1.0, 1.0, 1.0), voxel_B, voxel_properties);
+  geometries.MaybeAddGeometry(Sphere(0.5), compliant_mesh,
+                              compliant_mesh_properties);
+  geometries.MaybeAddGeometry(HalfSpace(), compliant_half_space,
+                              compliant_mesh_properties);
+  geometries.MaybeAddGeometry(Box(1.0, 1.0, 1.0), rigid_mesh,
+                              rigid_mesh_properties);
+  geometries.MaybeAddGeometry(HalfSpace(), rigid_half_space,
+                              rigid_mesh_properties);
+  for (GeometryId id : {voxel_A, voxel_B, compliant_mesh, compliant_half_space,
+                        rigid_mesh, rigid_half_space}) {
+    X_WGs.emplace(id, RigidTransform<double>());
+  }
+
+  ContactCalculator<double> calculator(
+      &X_WGs, &geometries, HydroelasticContactRepresentation::kTriangle);
+  for (const auto& [id_A, id_B] :
+       {std::pair(voxel_A, rigid_mesh), std::pair(rigid_mesh, voxel_A),
+        std::pair(voxel_A, rigid_half_space),
+        std::pair(voxel_A, compliant_mesh), std::pair(compliant_mesh, voxel_A),
+        std::pair(voxel_A, compliant_half_space),
+        std::pair(voxel_A, voxel_B)}) {
+    auto [result, surface] = calculator.MaybeMakeContactSurface(id_A, id_B);
+    EXPECT_EQ(result, ContactSurfaceResult::kUnsupported);
+    EXPECT_EQ(surface, nullptr);
+  }
+}
+
 // Confirms that rigid-rigid contact can't be evaluated.
 TYPED_TEST(MaybeMakeContactSurfaceTests, BothRigid) {
   using T = TypeParam;

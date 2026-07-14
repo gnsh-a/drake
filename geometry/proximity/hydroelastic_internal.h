@@ -17,6 +17,7 @@
 #include "drake/geometry/proximity/volume_mesh_field.h"
 #include "drake/geometry/proximity/volume_mesh_topology.h"
 #include "drake/geometry/proximity/volume_to_surface_mesh.h"
+#include "drake/geometry/proximity/voxel_sdf_geometry.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/shape_specification.h"
 
@@ -137,10 +138,11 @@ struct CompliantHalfSpace {
 };
 
 /* Definition of a compliant geometry for hydroelastic implementations. To be a
- compliant geometry, a shape must be associated with either:
+ compliant geometry, a shape must be associated with one of:
 
    - a volume mesh (including a linearized scalar pressure field), or
-   - a compliant half space (with a "slab thickness").  */
+   - a compliant half space (with a "slab thickness"), or
+   - a voxel signed-distance field.  */
 class CompliantGeometry {
  public:
   /* Constructs a compliant half space representation.  */
@@ -151,18 +153,23 @@ class CompliantGeometry {
   explicit CompliantGeometry(CompliantMesh&& compliant_mesh)
       : geometry_(std::move(compliant_mesh)) {}
 
+  /* Constructs a voxel signed-distance-field representation. */
+  explicit CompliantGeometry(VoxelSdfGeometry&& voxel_sdf)
+      : geometry_(std::move(voxel_sdf)) {}
+
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CompliantGeometry);
 
   /* @name  Distinguishing compliant representations
 
-   The %CompliantGeometry can contain either a volume mesh (used as the
-   representation for most shapes) or a half space. Accessing the members of
-   either representation (`mesh()`, `pressure_field()`, and `bvh()` for the
-   volume mesh or `pressure_scale()` for the half space) is conditioned on
-   knowing what type a particular instance holds.
+   The %CompliantGeometry can contain a volume mesh (used as the representation
+   for most shapes), a half space, or a voxel SDF. Accessing the members of a
+   representation (`mesh()`, `pressure_field()`, and `bvh()` for the volume
+   mesh, `pressure_scale()` for the half space, or `voxel_sdf()` for the voxel
+   representation) is conditioned on knowing what type an instance holds.
 
-   This can be accomplished by querying `is_half_space()`. Attempting to access
-   data members of the *wrong* type will throw an exception.  */
+   This can be accomplished by querying `is_half_space()`, `is_mesh()`, or
+   `is_voxel_sdf()`. Attempting to access data members of the *wrong* type will
+   throw an exception.  */
   // TODO(SeanCurtis-TRI): remove all of these legacy API wrappers for
   // CompliantMesh and CompliantHalfSpace.
   //@{
@@ -171,57 +178,101 @@ class CompliantGeometry {
     return std::holds_alternative<CompliantHalfSpace>(geometry_);
   }
 
-  /* Returns a reference to the CompliantMesh -- calling this will throw if
-   is_half_space() returns `true`.  */
+  bool is_mesh() const {
+    return std::holds_alternative<CompliantMesh>(geometry_);
+  }
+
+  bool is_voxel_sdf() const {
+    return std::holds_alternative<VoxelSdfGeometry>(geometry_);
+  }
+
+  /* Returns a reference to the CompliantMesh -- calling this will throw unless
+   is_mesh() returns `true`.  */
   const CompliantMesh& compliant_mesh() const {
-    if (is_half_space()) {
+    if (!is_mesh()) {
+      if (is_half_space()) {
+        throw std::runtime_error(
+            "CompliantGeometry::compliant_mesh() cannot be invoked for "
+            "compliant half space.");
+      }
       throw std::runtime_error(
           "CompliantGeometry::compliant_mesh() cannot be invoked for compliant "
-          "half space.");
+          "voxel SDF.");
     }
     return std::get<CompliantMesh>(geometry_);
   }
 
-  /* Returns a reference to the CompliantHalfSpace -- calling this will throw if
-   is_half_space() returns `false`.  */
+  /* Returns a reference to the CompliantHalfSpace -- calling this will throw
+   unless is_half_space() returns `true`.  */
   const CompliantHalfSpace& compliant_half_space() const {
     if (!is_half_space()) {
+      if (is_mesh()) {
+        throw std::runtime_error(
+            "CompliantGeometry::compliant_half_space() cannot be invoked for "
+            "compliant mesh.");
+      }
       throw std::runtime_error(
           "CompliantGeometry::compliant_half_space() cannot be invoked for "
-          "compliant mesh.");
+          "compliant voxel SDF.");
     }
     return std::get<CompliantHalfSpace>(geometry_);
   }
 
-  /* Returns a reference to the volume mesh -- calling this will throw if
-   is_half_space() returns `true`.  */
-  const VolumeMesh<double>& mesh() const {
-    if (is_half_space()) {
+  /* Returns a reference to the VoxelSdfGeometry -- calling this will throw
+   unless is_voxel_sdf() returns `true`. */
+  const VoxelSdfGeometry& voxel_sdf() const {
+    if (!is_voxel_sdf()) {
       throw std::runtime_error(
-          "CompliantGeometry::mesh() cannot be invoked for compliant half "
-          "space");
+          "CompliantGeometry::voxel_sdf() can only be invoked for compliant "
+          "voxel SDF geometry.");
+    }
+    return std::get<VoxelSdfGeometry>(geometry_);
+  }
+
+  /* Returns a reference to the volume mesh -- calling this will throw unless
+   is_mesh() returns `true`.  */
+  const VolumeMesh<double>& mesh() const {
+    if (!is_mesh()) {
+      if (is_half_space()) {
+        throw std::runtime_error(
+            "CompliantGeometry::mesh() cannot be invoked for compliant half "
+            "space");
+      }
+      throw std::runtime_error(
+          "CompliantGeometry::mesh() cannot be invoked for compliant voxel "
+          "SDF");
     }
     return std::get<CompliantMesh>(geometry_).mesh();
   }
 
   /* Returns a reference to the mesh's linearized pressure field -- calling
-   this will throw if is_half_space() returns `true`.  */
+   this will throw unless is_mesh() returns `true`.  */
   const VolumeMeshFieldLinear<double, double>& pressure_field() const {
-    if (is_half_space()) {
+    if (!is_mesh()) {
+      if (is_half_space()) {
+        throw std::runtime_error(
+            "CompliantGeometry::pressure_field() cannot be invoked for "
+            "compliant half space");
+      }
       throw std::runtime_error(
-          "CompliantGeometry::pressure_field() cannot be "
-          "invoked for compliant half space");
+          "CompliantGeometry::pressure_field() cannot be invoked for "
+          "compliant voxel SDF");
     }
     return std::get<CompliantMesh>(geometry_).pressure();
   }
 
   /* Returns a reference to the bounding volume hierarchy -- calling this will
-   throw if is_half_space() returns `true`.  */
+   throw unless is_mesh() returns `true`.  */
   const Bvh<Obb, VolumeMesh<double>>& bvh() const {
-    if (is_half_space()) {
+    if (!is_mesh()) {
+      if (is_half_space()) {
+        throw std::runtime_error(
+            "CompliantGeometry::bvh() cannot be invoked for compliant half "
+            "space");
+      }
       throw std::runtime_error(
-          "CompliantGeometry::bvh() cannot be invoked for compliant half "
-          "space");
+          "CompliantGeometry::bvh() cannot be invoked for compliant voxel "
+          "SDF");
     }
     return std::get<CompliantMesh>(geometry_).bvh();
   }
@@ -230,9 +281,14 @@ class CompliantGeometry {
    is_half_space() returns `false`.  */
   double pressure_scale() const {
     if (!is_half_space()) {
+      if (is_mesh()) {
+        throw std::runtime_error(
+            "CompliantGeometry::pressure_scale() cannot be invoked for "
+            "compliant mesh");
+      }
       throw std::runtime_error(
           "CompliantGeometry::pressure_scale() cannot be invoked for compliant "
-          "mesh");
+          "voxel SDF");
     }
     return std::get<CompliantHalfSpace>(geometry_).pressure_scale;
   }
@@ -244,8 +300,14 @@ class CompliantGeometry {
    mesh and it is not necessary to carry the value here.  */
   double half_space_margin() const {
     if (!is_half_space()) {
+      if (is_mesh()) {
+        throw std::runtime_error(
+            "CompliantGeometry::margin() cannot be invoked for compliant "
+            "mesh");
+      }
       throw std::runtime_error(
-          "CompliantGeometry::margin() cannot be invoked for compliant mesh");
+          "CompliantGeometry::margin() cannot be invoked for compliant voxel "
+          "SDF");
     }
     return std::get<CompliantHalfSpace>(geometry_).margin;
   }
@@ -253,7 +315,7 @@ class CompliantGeometry {
   //@}
 
  private:
-  std::variant<CompliantHalfSpace, CompliantMesh> geometry_;
+  std::variant<CompliantHalfSpace, CompliantMesh, VoxelSdfGeometry> geometry_;
 };
 
 /* Defines a rigid mesh -- a surface mesh and its bounding volume hierarchy.

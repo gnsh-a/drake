@@ -112,6 +112,12 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
     const CompliantGeometry& compliant_A = geometries_.compliant_geometry(id_A);
     const CompliantGeometry& compliant_B = geometries_.compliant_geometry(id_B);
 
+    // Voxel contact is deliberately unsupported until its contact algorithm
+    // is implemented; stop here before any mesh-only accessor can be reached.
+    if (compliant_A.is_voxel_sdf() || compliant_B.is_voxel_sdf()) {
+      return {ContactSurfaceResult::kUnsupported, nullptr};
+    }
+
     // Halfspace vs. halfspace is not supported.
     if (compliant_A.is_half_space() && compliant_B.is_half_space()) {
       return {ContactSurfaceResult::kHalfSpaceHalfSpace, nullptr};
@@ -141,6 +147,12 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
 
   const CompliantGeometry& compliant = geometries_.compliant_geometry(id_S);
   const RigidGeometry& rigid = geometries_.rigid_geometry(id_R);
+
+  // Voxel contact is deliberately unsupported until its contact algorithm
+  // is implemented; stop here before any mesh-only accessor can be reached.
+  if (compliant.is_voxel_sdf()) {
+    return {ContactSurfaceResult::kUnsupported, nullptr};
+  }
 
   if (compliant.is_half_space() && rigid.is_half_space()) {
     return {ContactSurfaceResult::kHalfSpaceHalfSpace, nullptr};
