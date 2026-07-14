@@ -1,9 +1,14 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <vector>
 
 #include "drake/common/eigen_types.h"
+#include "drake/geometry/geometry_ids.h"
+#include "drake/geometry/proximity/voxel_sdf_geometry.h"
+#include "drake/geometry/query_results/contact_surface.h"
+#include "drake/math/rigid_transform.h"
 
 namespace drake {
 namespace geometry {
@@ -49,6 +54,24 @@ struct VoxelSdfContactPolygon {
 std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
     const Vector3<double>& center_A, double voxel_width,
     const AffineSdfField& sdf_A, const AffineSdfField& sdf_B_A);
+
+/* Calculates a polygonal contact surface between two compliant Box voxel SDF
+ representations. Box A's complete voxel grid is traversed, and all intermediate
+ geometry is constructed in frame A before the result is transformed to World.
+
+ The returned surface owns its mesh, pressure field, and constituent pressure
+ gradients; it retains no references to either registered representation or
+ pose. This calculator is double-only and is not yet connected to SceneGraph
+ contact dispatch.
+
+ @returns nullptr if no A voxel produces a positive-area contact polygon.
+ @pre `id_A < id_B`, so A and B retain the M and N roles, respectively, in the
+      returned ContactSurface.
+ */
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B);
 
 }  // namespace hydroelastic
 }  // namespace internal

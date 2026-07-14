@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -11,6 +12,9 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/geometry/proximity_engine.h"
+#include "drake/geometry/proximity_properties.h"
+#include "drake/math/rotation_matrix.h"
 
 namespace drake {
 namespace geometry {
@@ -19,6 +23,8 @@ namespace hydroelastic {
 namespace {
 
 using Eigen::Vector3d;
+using math::RigidTransformd;
+using math::RotationMatrixd;
 
 constexpr double kTolerance = 1e-13;
 
@@ -94,6 +100,68 @@ void ExpectPolygonInvariants(const VoxelSdfContactPolygon& polygon,
       EXPECT_GT((vertex - polygon.vertices_A[j]).norm(), kTolerance);
     }
   }
+}
+
+std::pair<GeometryId, GeometryId> MakeOrderedGeometryIds() {
+  const GeometryId id_A = GeometryId::get_new_id();
+  const GeometryId id_B = GeometryId::get_new_id();
+  EXPECT_LT(id_A, id_B);
+  return {id_A, id_B};
+}
+
+void ExpectSurfaceInvariants(const ContactSurface<double>& surface,
+                             GeometryId id_A, GeometryId id_B) {
+  EXPECT_EQ(surface.id_M(), id_A);
+  EXPECT_EQ(surface.id_N(), id_B);
+  EXPECT_EQ(surface.representation(),
+            HydroelasticContactRepresentation::kPolygon);
+  EXPECT_FALSE(surface.is_triangle());
+  EXPECT_GT(surface.num_faces(), 0);
+  EXPECT_GT(surface.num_vertices(), 0);
+  EXPECT_TRUE(surface.HasGradE_M());
+  EXPECT_TRUE(surface.HasGradE_N());
+
+  const PolygonSurfaceMesh<double>& mesh_W = surface.poly_mesh_W();
+  const PolygonSurfaceMeshFieldLinear<double, double>& field_W =
+      surface.poly_e_MN();
+  int face_vertex_count = 0;
+  for (int v = 0; v < mesh_W.num_vertices(); ++v) {
+    EXPECT_TRUE(mesh_W.vertex(v).allFinite());
+    const double pressure = field_W.EvaluateAtVertex(v);
+    EXPECT_TRUE(std::isfinite(pressure));
+    EXPECT_GE(pressure, 0.0);
+  }
+  for (int f = 0; f < mesh_W.num_faces(); ++f) {
+    const SurfacePolygon face = mesh_W.element(f);
+    face_vertex_count += face.num_vertices();
+    EXPECT_GT(face.num_vertices(), 2);
+    EXPECT_TRUE(std::isfinite(surface.area(f)));
+    EXPECT_GT(surface.area(f), 0.0);
+    EXPECT_TRUE(surface.face_normal(f).allFinite());
+    EXPECT_NEAR(surface.face_normal(f).norm(), 1.0, 1e-13);
+    EXPECT_TRUE(surface.centroid(f).allFinite());
+
+    const double centroid_pressure =
+        field_W.EvaluateCartesian(f, surface.centroid(f));
+    EXPECT_TRUE(std::isfinite(centroid_pressure));
+    EXPECT_GE(centroid_pressure, -1e-12);
+    const int first_vertex = face.vertex(0);
+    EXPECT_NEAR(field_W.EvaluateCartesian(f, mesh_W.vertex(first_vertex)),
+                field_W.EvaluateAtVertex(first_vertex), 1e-12);
+
+    const Vector3d& grad_p_A_W = surface.EvaluateGradE_M_W(f);
+    const Vector3d& grad_p_B_W = surface.EvaluateGradE_N_W(f);
+    EXPECT_TRUE(grad_p_A_W.allFinite());
+    EXPECT_TRUE(grad_p_B_W.allFinite());
+    EXPECT_TRUE(
+        CompareMatrices(field_W.EvaluateGradient(f), grad_p_A_W, 1e-13));
+    // The face normal must follow increasing A pressure and decreasing B
+    // pressure, i.e., point out of B and into A.
+    EXPECT_GT(surface.face_normal(f).dot(grad_p_A_W - grad_p_B_W), 0.0);
+  }
+  // Every voxel contributes an independent polygon; vertices are not welded
+  // or shared across faces.
+  EXPECT_EQ(face_vertex_count, mesh_W.num_vertices());
 }
 
 GTEST_TEST(VoxelSdfContactTest, PlaneCubeSectionTopologies) {
@@ -287,6 +355,181 @@ GTEST_TEST(VoxelSdfContactTest, ResultOwnsIndependentStorage) {
   ASSERT_TRUE(repeated.has_value());
   EXPECT_NE(repeated->vertices_A.data(), result->vertices_A.data());
   EXPECT_NE(repeated->pressures.data(), result->pressures.data());
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, SeparatedAndTouchingBoxes) {
+  const VoxelSdfGeometry A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const VoxelSdfGeometry B(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA;
+
+  const RigidTransformd X_WB_separated(Vector3d(3.0, 0.0, 0.0));
+  EXPECT_EQ(
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB_separated, id_B),
+      nullptr);
+
+  const RigidTransformd X_WB_touching(Vector3d(2.0, 0.0, 0.0));
+  const auto touching =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB_touching, id_B);
+  ASSERT_NE(touching, nullptr);
+  ExpectSurfaceInvariants(*touching, id_A, id_B);
+  for (int v = 0; v < touching->num_vertices(); ++v) {
+    EXPECT_NEAR(touching->poly_e_MN().EvaluateAtVertex(v), 0.0, 1e-12);
+  }
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, FaceOverlapDepthsAndMultipleVoxels) {
+  const VoxelSdfGeometry A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const VoxelSdfGeometry B(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA;
+
+  const auto shallow = CalcVoxelSdfCompliantContact(
+      A, X_WA, id_A, B, RigidTransformd(Vector3d(1.8, 0.0, 0.0)), id_B);
+  ASSERT_NE(shallow, nullptr);
+  ExpectSurfaceInvariants(*shallow, id_A, id_B);
+  EXPECT_GT(shallow->num_faces(), 1);
+
+  const auto deeper = CalcVoxelSdfCompliantContact(
+      A, X_WA, id_A, B, RigidTransformd(Vector3d(1.2, 0.0, 0.0)), id_B);
+  ASSERT_NE(deeper, nullptr);
+  ExpectSurfaceInvariants(*deeper, id_A, id_B);
+  EXPECT_GT(deeper->num_faces(), 1);
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, EdgeCornerAndRotatedOverlap) {
+  const VoxelSdfGeometry A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const VoxelSdfGeometry B(Box(2.0, 2.0, 2.0), 0.5, 100.0);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA;
+
+  const auto edge = CalcVoxelSdfCompliantContact(
+      A, X_WA, id_A, B, RigidTransformd(Vector3d(1.8, 1.8, 0.0)), id_B);
+  ASSERT_NE(edge, nullptr);
+  ExpectSurfaceInvariants(*edge, id_A, id_B);
+
+  const auto corner = CalcVoxelSdfCompliantContact(
+      A, X_WA, id_A, B, RigidTransformd(Vector3d(1.8, 1.8, 1.8)), id_B);
+  ASSERT_NE(corner, nullptr);
+  ExpectSurfaceInvariants(*corner, id_A, id_B);
+
+  const RigidTransformd X_WB_rotated(RotationMatrixd::MakeZRotation(0.35),
+                                     Vector3d(1.5, 0.1, 0.0));
+  const auto rotated =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB_rotated, id_B);
+  ASSERT_NE(rotated, nullptr);
+  ExpectSurfaceInvariants(*rotated, id_A, id_B);
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, UnequalGeometryAndWorldPose) {
+  const VoxelSdfGeometry A(Box(2.0, 3.0, 4.0), 0.5, 120.0);
+  const VoxelSdfGeometry B(Box(1.5, 2.5, 3.5), 0.3, 275.0);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA(RotationMatrixd::MakeZRotation(0.4),
+                             Vector3d(1.0, 2.0, 3.0));
+  const RigidTransformd X_AB(Vector3d(1.4, 0.1, -0.1));
+  const RigidTransformd X_WB = X_WA * X_AB;
+
+  const auto surface_A =
+      CalcVoxelSdfCompliantContact(A, RigidTransformd(), id_A, B, X_AB, id_B);
+  const auto surface_W =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB, id_B);
+  ASSERT_NE(surface_A, nullptr);
+  ASSERT_NE(surface_W, nullptr);
+  ExpectSurfaceInvariants(*surface_A, id_A, id_B);
+  ExpectSurfaceInvariants(*surface_W, id_A, id_B);
+  ASSERT_EQ(surface_W->num_faces(), surface_A->num_faces());
+  ASSERT_EQ(surface_W->num_vertices(), surface_A->num_vertices());
+  EXPECT_GT(surface_W->num_faces(), 1);
+
+  // Roundoff in the recomputed relative pose can change a polygon's cyclic
+  // starting vertex. Compare the transformed vertex-and-pressure multiset,
+  // independent of that inconsequential ordering choice.
+  std::vector<bool> matched_W(surface_W->num_vertices(), false);
+  for (int v_A = 0; v_A < surface_A->num_vertices(); ++v_A) {
+    const Vector3d expected_W = X_WA * surface_A->poly_mesh_W().vertex(v_A);
+    const double expected_pressure =
+        surface_A->poly_e_MN().EvaluateAtVertex(v_A);
+    bool found = false;
+    for (int v_W = 0; v_W < surface_W->num_vertices(); ++v_W) {
+      if (matched_W[v_W]) continue;
+      if ((surface_W->poly_mesh_W().vertex(v_W) - expected_W).norm() <= 1e-12 &&
+          std::abs(surface_W->poly_e_MN().EvaluateAtVertex(v_W) -
+                   expected_pressure) <= 1e-12) {
+        matched_W[v_W] = true;
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found);
+  }
+  for (int f = 0; f < surface_W->num_faces(); ++f) {
+    EXPECT_TRUE(CompareMatrices(surface_W->face_normal(f),
+                                X_WA.rotation() * surface_A->face_normal(f),
+                                1e-13));
+    EXPECT_TRUE(CompareMatrices(
+        surface_W->EvaluateGradE_M_W(f),
+        X_WA.rotation() * surface_A->EvaluateGradE_M_W(f), 1e-13));
+    EXPECT_TRUE(CompareMatrices(
+        surface_W->EvaluateGradE_N_W(f),
+        X_WA.rotation() * surface_A->EvaluateGradE_N_W(f), 1e-13));
+  }
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, SurfaceOwnershipAndEngineCopy) {
+  const Box box(2.0, 2.0, 2.0);
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &properties);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA;
+  const RigidTransformd X_WB(Vector3d(1.5, 0.0, 0.0));
+
+  ProximityEngine<double> engine;
+  engine.AddDynamicGeometry(box, X_WA, id_A, properties);
+  engine.AddDynamicGeometry(box, X_WB, id_B, properties);
+  ProximityEngine<double> engine_copy(engine);
+
+  const VoxelSdfGeometry& A =
+      engine.hydroelastic_geometries().compliant_geometry(id_A).voxel_sdf();
+  const VoxelSdfGeometry& B =
+      engine.hydroelastic_geometries().compliant_geometry(id_B).voxel_sdf();
+  const VoxelSdfGeometry& copied_A = engine_copy.hydroelastic_geometries()
+                                         .compliant_geometry(id_A)
+                                         .voxel_sdf();
+  const VoxelSdfGeometry& copied_B = engine_copy.hydroelastic_geometries()
+                                         .compliant_geometry(id_B)
+                                         .voxel_sdf();
+  EXPECT_NE(&A.sample(0, 0, 0), &copied_A.sample(0, 0, 0));
+  EXPECT_NE(&B.sample(0, 0, 0), &copied_B.sample(0, 0, 0));
+
+  const auto original_surface =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB, id_B);
+  const auto copied_surface =
+      CalcVoxelSdfCompliantContact(copied_A, X_WA, id_A, copied_B, X_WB, id_B);
+  ASSERT_NE(original_surface, nullptr);
+  ASSERT_NE(copied_surface, nullptr);
+  ExpectSurfaceInvariants(*original_surface, id_A, id_B);
+  ExpectSurfaceInvariants(*copied_surface, id_A, id_B);
+  EXPECT_TRUE(original_surface->Equal(*copied_surface));
+  EXPECT_NE(&original_surface->poly_mesh_W(), &copied_surface->poly_mesh_W());
+  EXPECT_NE(
+      static_cast<const void*>(&original_surface->poly_mesh_W().vertex(0)),
+      static_cast<const void*>(&A.sample(0, 0, 0)));
+
+  const auto repeated_surface =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB, id_B);
+  ASSERT_NE(repeated_surface, nullptr);
+  EXPECT_TRUE(original_surface->Equal(*repeated_surface));
+  EXPECT_NE(&original_surface->poly_mesh_W(), &repeated_surface->poly_mesh_W());
+
+  const auto* sample_address = &A.sample(0, 0, 0);
+  const double sample_value = sample_address->value;
+  auto temporary_surface =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB, id_B);
+  ASSERT_NE(temporary_surface, nullptr);
+  temporary_surface.reset();
+  EXPECT_EQ(&A.sample(0, 0, 0), sample_address);
+  EXPECT_EQ(A.sample(0, 0, 0).value, sample_value);
 }
 
 }  // namespace

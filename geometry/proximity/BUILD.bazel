@@ -486,9 +486,15 @@ drake_cc_library(
         "//geometry:__pkg__",
     ],
     deps = [
+        ":contact_surface_utility",
+        ":distance_to_point_callback",
         ":mesh_intersection",
         ":posed_half_space",
+        ":voxel_sdf_geometry",
         "//common:essential",
+        "//geometry:geometry_ids",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
     ],
 )
 
@@ -1466,6 +1472,10 @@ drake_cc_googletest(
     deps = [
         ":voxel_sdf_contact",
         "//common/test_utilities:eigen_matrix_compare",
+        "//geometry:proximity_engine",
+        "//geometry:proximity_properties",
+        "//geometry:shape_specification",
+        "//math:geometric_transform",
     ],
 )
 

@@ -4,9 +4,14 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include "drake/common/drake_assert.h"
+#include "drake/geometry/proximity/contact_surface_utility.h"
+#include "drake/geometry/proximity/distance_to_point_callback.h"
 #include "drake/geometry/proximity/mesh_intersection.h"
 #include "drake/geometry/proximity/posed_half_space.h"
 
@@ -224,6 +229,88 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
   return VoxelSdfContactPolygon{std::move(clipped_vertices_A),
                                 std::move(pressures), nhat_BA_A, grad_p_A,
                                 grad_p_B_A};
+}
+
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B) {
+  DRAKE_DEMAND(id_A < id_B);
+
+  // Traverse and build in A. B's queried point and gradient are converted into
+  // A for each cell; no registered representation stores posed data.
+  const math::RigidTransformd X_AB = X_WA.InvertAndCompose(X_WB);
+  const math::RigidTransformd X_BA = X_AB.inverse();
+  PolyMeshBuilder<double> builder_A;
+  std::vector<Vector3d> grad_p_A_A_per_face;
+  std::vector<Vector3d> grad_p_B_A_per_face;
+
+  for (int k = 0; k < A.cell_counts()[2]; ++k) {
+    for (int j = 0; j < A.cell_counts()[1]; ++j) {
+      for (int i = 0; i < A.cell_counts()[0]; ++i) {
+        const Vector3d center_A = A.cell_center(i, j, k);
+        const VoxelSdfGeometry::SdfSample& sample_A = A.sample(i, j, k);
+
+        const Vector3d center_B = X_BA * center_A;
+        const auto distance_B =
+            point_distance::DistanceToPoint<double>::ComputeDistanceToBox<3>(
+                B.half_widths(), center_B);
+        const Vector3d& nearest_B = std::get<0>(distance_B);
+        const Vector3d& gradient_B = std::get<1>(distance_B);
+        const double phi_B = gradient_B.dot(center_B - nearest_B);
+
+        const AffineSdfField sdf_A{sample_A.value, sample_A.gradient,
+                                   A.pressure_scale(),
+                                   A.characteristic_length()};
+        const AffineSdfField sdf_B_A{phi_B, X_AB.rotation() * gradient_B,
+                                     B.pressure_scale(),
+                                     B.characteristic_length()};
+        std::optional<VoxelSdfContactPolygon> polygon =
+            CalcVoxelSdfContactPolygon(center_A, A.voxel_width(), sdf_A,
+                                       sdf_B_A);
+        if (!polygon.has_value()) continue;
+
+        DRAKE_DEMAND(polygon->vertices_A.size() == polygon->pressures.size());
+        std::vector<int> vertex_indices;
+        vertex_indices.reserve(polygon->vertices_A.size());
+        for (int v = 0; v < static_cast<int>(polygon->vertices_A.size()); ++v) {
+          vertex_indices.push_back(builder_A.AddVertex(polygon->vertices_A[v],
+                                                       polygon->pressures[v]));
+        }
+        const int faces_added = builder_A.AddPolygon(
+            vertex_indices, polygon->nhat_BA_A, polygon->grad_p_A);
+        DRAKE_DEMAND(faces_added == 1);
+        grad_p_A_A_per_face.push_back(polygon->grad_p_A);
+        grad_p_B_A_per_face.push_back(polygon->grad_p_B_A);
+      }
+    }
+  }
+
+  if (builder_A.num_faces() == 0) return nullptr;
+  DRAKE_DEMAND(static_cast<int>(grad_p_A_A_per_face.size()) ==
+               builder_A.num_faces());
+  DRAKE_DEMAND(static_cast<int>(grad_p_B_A_per_face.size()) ==
+               builder_A.num_faces());
+
+  auto [mesh_A, field_A] = builder_A.MakeMeshAndField();
+  // MeshFieldLinear requires that its underlying mesh be transformed first.
+  mesh_A->TransformVertices(X_WA);
+  field_A->Transform(X_WA);
+
+  auto grad_p_A_W_per_face =
+      std::make_unique<std::vector<Vector3d>>(std::move(grad_p_A_A_per_face));
+  auto grad_p_B_W_per_face =
+      std::make_unique<std::vector<Vector3d>>(std::move(grad_p_B_A_per_face));
+  for (Vector3d& gradient_W : *grad_p_A_W_per_face) {
+    gradient_W = X_WA.rotation() * gradient_W;
+  }
+  for (Vector3d& gradient_W : *grad_p_B_W_per_face) {
+    gradient_W = X_WA.rotation() * gradient_W;
+  }
+
+  return std::make_unique<ContactSurface<double>>(
+      id_A, id_B, std::move(mesh_A), std::move(field_A),
+      std::move(grad_p_A_W_per_face), std::move(grad_p_B_W_per_face));
 }
 
 }  // namespace hydroelastic
