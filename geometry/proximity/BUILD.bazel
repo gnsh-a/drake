@@ -478,6 +478,19 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "voxel_sdf_shape",
+    srcs = ["voxel_sdf_shape.cc"],
+    hdrs = ["voxel_sdf_shape.h"],
+    internal = True,
+    visibility = ["//visibility:private"],
+    deps = [
+        ":distance_to_point_callback",
+        "//common:essential",
+        "//geometry:shape_specification",
+    ],
+)
+
+drake_cc_library(
     name = "voxel_sdf_contact",
     srcs = ["voxel_sdf_contact.cc"],
     hdrs = ["voxel_sdf_contact.h"],
@@ -487,7 +500,6 @@ drake_cc_library(
     ],
     deps = [
         ":contact_surface_utility",
-        ":distance_to_point_callback",
         ":mesh_intersection",
         ":posed_half_space",
         ":voxel_sdf_geometry",
@@ -507,9 +519,8 @@ drake_cc_library(
         "//geometry:__pkg__",
     ],
     deps = [
-        ":distance_to_point_callback",
+        ":voxel_sdf_shape",
         "//common:essential",
-        "//geometry:shape_specification",
         "@fmt",
     ],
 )
@@ -1465,6 +1476,18 @@ drake_cc_googletest(
         "//common/test_utilities:expect_no_throw",
         "//common/test_utilities:expect_throws_message",
         "@fmt",
+    ],
+)
+
+drake_cc_googletest(
+    name = "voxel_sdf_shape_test",
+    deps = [
+        ":distance_to_point_callback",
+        ":voxel_sdf_shape",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//geometry:geometry_ids",
+        "//math:geometric_transform",
+        "@fcl_internal//:fcl",
     ],
 )
 

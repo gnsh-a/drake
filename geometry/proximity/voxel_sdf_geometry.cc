@@ -5,12 +5,13 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
-#include <tuple>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include <fmt/format.h>
 
 #include "drake/common/drake_assert.h"
-#include "drake/geometry/proximity/distance_to_point_callback.h"
 
 namespace drake {
 namespace geometry {
@@ -18,19 +19,22 @@ namespace internal {
 namespace hydroelastic {
 namespace {
 
-int CalcCellCount(double extent, double voxel_width, int axis) {
+int CalcCellCount(double extent, double voxel_width, int axis,
+                  std::string_view shape_name) {
   const double count = std::ceil(extent / voxel_width);
   if (!std::isfinite(count) ||
       count > static_cast<double>(std::numeric_limits<int>::max())) {
-    throw std::logic_error(fmt::format(
-        "The Box voxel SDF requires too many cells on axis {}", axis));
+    throw std::logic_error(
+        fmt::format("The {} voxel SDF requires too many cells on axis {}",
+                    shape_name, axis));
   }
   return std::max(1, static_cast<int>(count));
 }
 
-size_t CheckedMultiply(size_t a, size_t b) {
+size_t CheckedMultiply(size_t a, size_t b, std::string_view shape_name) {
   if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
-    throw std::logic_error("The Box voxel SDF sample count overflows size_t");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF sample count overflows size_t", shape_name));
   }
   return a * b;
 }
@@ -39,60 +43,71 @@ size_t CheckedMultiply(size_t a, size_t b) {
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
                                    double hydroelastic_modulus)
-    : half_widths_(box.size() / 2.0),
+    : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
+                                   double hydroelastic_modulus)
+    : shape_(std::move(shape)),
       voxel_width_(voxel_width),
       hydroelastic_modulus_(hydroelastic_modulus),
-      characteristic_length_(half_widths_.minCoeff()),
+      characteristic_length_(shape_.characteristic_length()),
       pressure_scale_(0.0) {
+  const std::string shape_name(shape_.shape_name());
   if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
-    throw std::logic_error(
-        "The Box voxel SDF width must be finite and strictly positive");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF width must be finite and strictly positive",
+        shape_name));
   }
   if (!(hydroelastic_modulus > 0.0 && std::isfinite(hydroelastic_modulus))) {
-    throw std::logic_error(
-        "The Box voxel SDF hydroelastic modulus must be finite and strictly "
-        "positive");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF hydroelastic modulus must be finite and strictly "
+        "positive",
+        shape_name));
   }
   if (!(characteristic_length_ > 0.0 &&
         std::isfinite(characteristic_length_))) {
-    throw std::logic_error(
-        "The Box voxel SDF characteristic length must be finite and strictly "
-        "positive");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF characteristic length must be finite and strictly "
+        "positive",
+        shape_name));
   }
   pressure_scale_ = hydroelastic_modulus_ / characteristic_length_;
   if (!(pressure_scale_ > 0.0 && std::isfinite(pressure_scale_))) {
-    throw std::logic_error(
-        "The Box voxel SDF pressure scale must be finite and strictly "
-        "positive");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF pressure scale must be finite and strictly positive",
+        shape_name));
   }
 
-  const Vector3<double> extent = 2.0 * half_widths_;
+  const Vector3<double> extent = 2.0 * shape_.bounding_box_half_widths();
   for (int a = 0; a < 3; ++a) {
-    cell_counts_[a] = CalcCellCount(extent[a], voxel_width_, a);
+    cell_counts_[a] = CalcCellCount(extent[a], voxel_width_, a, shape_name);
     // Centering the padded grid about the Box makes its padding symmetric.
     lower_cell_boundary_[a] = -0.5 * cell_counts_[a] * voxel_width_;
     if (!std::isfinite(lower_cell_boundary_[a])) {
-      throw std::logic_error(fmt::format(
-          "The Box voxel SDF grid boundary is not finite on axis {}", a));
+      throw std::logic_error(
+          fmt::format("The {} voxel SDF grid boundary is not finite on axis {}",
+                      shape_name, a));
     }
   }
 
-  size_t sample_count = CheckedMultiply(static_cast<size_t>(cell_counts_[0]),
-                                        static_cast<size_t>(cell_counts_[1]));
-  sample_count =
-      CheckedMultiply(sample_count, static_cast<size_t>(cell_counts_[2]));
+  size_t sample_count =
+      CheckedMultiply(static_cast<size_t>(cell_counts_[0]),
+                      static_cast<size_t>(cell_counts_[1]), shape_name);
+  sample_count = CheckedMultiply(
+      sample_count, static_cast<size_t>(cell_counts_[2]), shape_name);
   if (sample_count > samples_.max_size()) {
-    throw std::logic_error(
-        "The Box voxel SDF sample count cannot be represented by a vector");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF sample count cannot be represented by a vector",
+        shape_name));
   }
   try {
     samples_.resize(sample_count);
   } catch (const std::bad_alloc&) {
-    throw std::logic_error(
-        "The Box voxel SDF samples cannot be allocated safely");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF samples cannot be allocated safely", shape_name));
   } catch (const std::length_error&) {
-    throw std::logic_error(
-        "The Box voxel SDF samples cannot be allocated safely");
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF samples cannot be allocated safely", shape_name));
   }
 
   for (int k = 0; k < cell_counts_[2]; ++k) {
@@ -101,23 +116,18 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
         const Vector3<double> center = cell_center(i, j, k);
         if (!center.allFinite()) {
           throw std::logic_error(fmt::format(
-              "The Box voxel SDF cell center ({}, {}, {}) is not finite", i, j,
-              k));
+              "The {} voxel SDF cell center ({}, {}, {}) is not finite",
+              shape_name, i, j, k));
         }
-        const auto distance =
-            point_distance::DistanceToPoint<double>::ComputeDistanceToBox<3>(
-                half_widths_, center);
-        const Vector3<double>& nearest = std::get<0>(distance);
-        const Vector3<double>& gradient = std::get<1>(distance);
-        const double phi = gradient.dot(center - nearest);
-        if (!nearest.allFinite() || !gradient.allFinite() ||
-            !std::isfinite(phi)) {
-          throw std::logic_error(fmt::format(
-              "The Box voxel SDF sample ({}, {}, {}) is not finite", i, j, k));
+        const SdfSample sdf = EvaluateSdf(center);
+        if (!sdf.gradient.allFinite() || !std::isfinite(sdf.value)) {
+          throw std::logic_error(
+              fmt::format("The {} voxel SDF sample ({}, {}, {}) is not finite",
+                          shape_name, i, j, k));
         }
         // At medial-axis ties, the chosen Box gradient follows Drake's public
         // point-distance implementation.
-        samples_[linear_index(i, j, k)] = SdfSample{phi, gradient};
+        samples_[linear_index(i, j, k)] = sdf;
       }
     }
   }
@@ -140,6 +150,11 @@ Vector3<double> VoxelSdfGeometry::cell_center(int i, int j, int k) const {
 const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::sample(int i, int j,
                                                             int k) const {
   return samples_[linear_index(i, j, k)];
+}
+
+VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
+    const Vector3<double>& p_GQ) const {
+  return shape_.Evaluate(p_GQ);
 }
 
 size_t VoxelSdfGeometry::linear_index(int i, int j, int k) const {

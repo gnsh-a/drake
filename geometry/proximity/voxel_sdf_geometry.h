@@ -5,28 +5,26 @@
 
 #include "drake/common/drake_copyable.h"
 #include "drake/common/eigen_types.h"
-#include "drake/geometry/shape_specification.h"
+#include "drake/geometry/proximity/voxel_sdf_shape.h"
 
 namespace drake {
 namespace geometry {
 namespace internal {
 namespace hydroelastic {
 
-/* Immutable registered geometry data for a Box voxel signed-distance field.
- Grid coordinates and gradients are expressed in the Box geometry frame. */
+/* Immutable registered geometry data for a primitive voxel signed-distance
+ field. Grid coordinates and gradients are expressed in the geometry frame. */
 class VoxelSdfGeometry {
  public:
-  struct SdfSample {
-    double value{};
-    Vector3<double> gradient{};
-  };
+  using SdfSample = VoxelSdfShape::Sample;
 
   VoxelSdfGeometry(const Box& box, double voxel_width,
+                   double hydroelastic_modulus);
+  VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                    double hydroelastic_modulus);
 
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VoxelSdfGeometry);
 
-  const Vector3<double>& half_widths() const { return half_widths_; }
   double voxel_width() const { return voxel_width_; }
   double hydroelastic_modulus() const { return hydroelastic_modulus_; }
   double characteristic_length() const { return characteristic_length_; }
@@ -38,11 +36,12 @@ class VoxelSdfGeometry {
 
   Vector3<double> cell_center(int i, int j, int k) const;
   const SdfSample& sample(int i, int j, int k) const;
+  SdfSample EvaluateSdf(const Vector3<double>& p_GQ) const;
 
  private:
   size_t linear_index(int i, int j, int k) const;
 
-  Vector3<double> half_widths_;
+  VoxelSdfShape shape_;
   double voxel_width_{};
   double hydroelastic_modulus_{};
   double characteristic_length_{};

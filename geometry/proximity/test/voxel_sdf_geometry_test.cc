@@ -23,7 +23,7 @@ using Eigen::Vector3d;
 
 GTEST_TEST(VoxelSdfGeometryTest, GridConstruction) {
   const VoxelSdfGeometry exact(Box(2.0, 3.0, 4.0), 1.0, 12.0);
-  EXPECT_TRUE(CompareMatrices(exact.half_widths(), Vector3d(1.0, 1.5, 2.0)));
+  EXPECT_EQ(exact.EvaluateSdf(Vector3d(1.0, 0.0, 0.0)).value, 0.0);
   EXPECT_TRUE(CompareMatrices(exact.cell_counts(), Vector3<int>(2, 3, 4)));
   EXPECT_TRUE(
       CompareMatrices(exact.lower_cell_boundary(), Vector3d(-1.0, -1.5, -2.0)));

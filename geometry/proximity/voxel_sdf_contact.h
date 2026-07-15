@@ -55,9 +55,10 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
     const Vector3<double>& center_A, double voxel_width,
     const AffineSdfField& sdf_A, const AffineSdfField& sdf_B_A);
 
-/* Calculates a polygonal contact surface between two compliant Box voxel SDF
- representations. Box A's complete voxel grid is traversed, and all intermediate
- geometry is constructed in frame A before the result is transformed to World.
+/* Calculates a polygonal contact surface between two compliant primitive voxel
+ SDF representations. Geometry A's complete voxel grid is traversed, and all
+ intermediate geometry is constructed in frame A before the result is
+ transformed to World.
 
  The returned surface owns its mesh, pressure field, and constituent pressure
  gradients; it retains no references to either registered representation or

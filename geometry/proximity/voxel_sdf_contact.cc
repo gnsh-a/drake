@@ -11,7 +11,6 @@
 
 #include "drake/common/drake_assert.h"
 #include "drake/geometry/proximity/contact_surface_utility.h"
-#include "drake/geometry/proximity/distance_to_point_callback.h"
 #include "drake/geometry/proximity/mesh_intersection.h"
 #include "drake/geometry/proximity/posed_half_space.h"
 
@@ -251,19 +250,14 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
         const VoxelSdfGeometry::SdfSample& sample_A = A.sample(i, j, k);
 
         const Vector3d center_B = X_BA * center_A;
-        const auto distance_B =
-            point_distance::DistanceToPoint<double>::ComputeDistanceToBox<3>(
-                B.half_widths(), center_B);
-        const Vector3d& nearest_B = std::get<0>(distance_B);
-        const Vector3d& gradient_B = std::get<1>(distance_B);
-        const double phi_B = gradient_B.dot(center_B - nearest_B);
+        const VoxelSdfGeometry::SdfSample sample_B = B.EvaluateSdf(center_B);
 
         const AffineSdfField sdf_A{sample_A.value, sample_A.gradient,
                                    A.pressure_scale(),
                                    A.characteristic_length()};
-        const AffineSdfField sdf_B_A{phi_B, X_AB.rotation() * gradient_B,
-                                     B.pressure_scale(),
-                                     B.characteristic_length()};
+        const AffineSdfField sdf_B_A{
+            sample_B.value, X_AB.rotation() * sample_B.gradient,
+            B.pressure_scale(), B.characteristic_length()};
         std::optional<VoxelSdfContactPolygon> polygon =
             CalcVoxelSdfContactPolygon(center_A, A.voxel_width(), sdf_A,
                                        sdf_B_A);
