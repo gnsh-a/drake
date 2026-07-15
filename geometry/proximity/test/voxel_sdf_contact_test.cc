@@ -395,6 +395,86 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SeparatedAndTouchingBoxes) {
   }
 }
 
+GTEST_TEST(VoxelSdfContactSurfaceTest, EqualSphereAnalyticalOracle) {
+  constexpr double radius = 1.0;
+  constexpr double modulus = 100.0;
+  constexpr double separation = 1.5;
+  constexpr double voxel_width = 0.125;
+  const VoxelSdfGeometry A(Sphere(radius), voxel_width, modulus);
+  const VoxelSdfGeometry B(Sphere(radius), voxel_width, modulus);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  EXPECT_EQ(CalcVoxelSdfCompliantContact(
+                A, RigidTransformd(), id_A, B,
+                RigidTransformd(Vector3d(2.1, 0.0, 0.0)), id_B),
+            nullptr);
+  EXPECT_EQ(CalcVoxelSdfCompliantContact(
+                A, RigidTransformd(), id_A, B,
+                RigidTransformd(Vector3d(2.0, 0.0, 0.0)), id_B),
+            nullptr);
+  const auto surface = CalcVoxelSdfCompliantContact(
+      A, RigidTransformd(), id_A, B,
+      RigidTransformd(Vector3d(separation, 0.0, 0.0)), id_B);
+  ASSERT_NE(surface, nullptr);
+  ExpectSurfaceInvariants(*surface, id_A, id_B);
+
+  const double a = 0.5 * separation;
+  const double disk_radius = std::sqrt(radius * radius - a * a);
+  const double expected_area = M_PI * disk_radius * disk_radius;
+  const double expected_max_pressure = modulus * (1.0 - a / radius);
+  const double expected_force =
+      2.0 * M_PI * modulus *
+      (0.5 * disk_radius * disk_radius -
+       (radius * radius * radius - a * a * a) / (3.0 * radius));
+
+  Vector3d integrated_force = Vector3d::Zero();
+  Vector3d integrated_torque = Vector3d::Zero();
+  double max_pressure = 0.0;
+  const Vector3d interface_center(a, 0.0, 0.0);
+  for (int f = 0; f < surface->num_faces(); ++f) {
+    const Vector3d centroid = surface->centroid(f);
+    const double pressure = surface->poly_e_MN().EvaluateCartesian(f, centroid);
+    max_pressure = std::max(max_pressure, pressure);
+    const Vector3d force =
+        pressure * surface->area(f) * surface->face_normal(f);
+    integrated_force += force;
+    integrated_torque += (centroid - interface_center).cross(force);
+  }
+
+  // These bounds describe physical error at h/r = 1/8 without depending on
+  // face count, vertex order, or grid storage details.
+  EXPECT_NEAR(surface->centroid().x(), a, voxel_width);
+  EXPECT_NEAR(surface->centroid().y(), 0.0, voxel_width);
+  EXPECT_NEAR(surface->centroid().z(), 0.0, voxel_width);
+  EXPECT_NEAR(surface->total_area(), expected_area, 0.15 * expected_area);
+  EXPECT_NEAR(max_pressure, expected_max_pressure,
+              0.15 * expected_max_pressure);
+  EXPECT_LT(integrated_force.x(), 0.0);
+  EXPECT_NEAR(-integrated_force.x(), expected_force, 0.2 * expected_force);
+  EXPECT_LT(integrated_force.tail<2>().norm(), 0.1 * expected_force);
+  EXPECT_LT(integrated_torque.norm(), 0.1 * expected_force * radius);
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, MixedSphereBoxContact) {
+  const VoxelSdfGeometry fine_sphere(Sphere(1.0), 0.25, 125.0);
+  const VoxelSdfGeometry coarse_box(Box::MakeCube(2.0), 0.5, 200.0);
+  const auto [id_sphere, id_box] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WS;
+  const RigidTransformd X_WB(RotationMatrixd::MakeZRotation(0.2),
+                             Vector3d(1.4, 0.1, 0.0));
+
+  const auto sphere_grid_surface = CalcVoxelSdfCompliantContact(
+      fine_sphere, X_WS, id_sphere, coarse_box, X_WB, id_box);
+  ASSERT_NE(sphere_grid_surface, nullptr);
+  ExpectSurfaceInvariants(*sphere_grid_surface, id_sphere, id_box);
+
+  const VoxelSdfGeometry fine_box(Box::MakeCube(2.0), 0.2, 200.0);
+  const VoxelSdfGeometry coarse_sphere(Sphere(1.0), 0.5, 125.0);
+  const auto box_grid_surface = CalcVoxelSdfCompliantContact(
+      fine_box, X_WB, id_box, coarse_sphere, X_WS, id_sphere);
+  ASSERT_NE(box_grid_surface, nullptr);
+  ExpectSurfaceInvariants(*box_grid_surface, id_sphere, id_box);
+}
+
 GTEST_TEST(VoxelSdfContactSurfaceTest, FaceOverlapDepthsAndMultipleVoxels) {
   const VoxelSdfGeometry A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
   const VoxelSdfGeometry B(Box(2.0, 2.0, 2.0), 0.5, 100.0);

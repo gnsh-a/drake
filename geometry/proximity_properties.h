@@ -164,8 +164,8 @@ void AddCompliantHydroelasticProperties(double resolution_hint,
                                         double hydroelastic_modulus,
                                         ProximityProperties* properties);
 
-/** Adds properties that opt a Box into the voxel signed-distance-field
- compliant hydroelastic representation.
+/** Adds properties that opt a Box or Sphere into the voxel
+ signed-distance-field compliant hydroelastic representation.
 
  @param voxel_width          The width of each cubic voxel, in meters.
  @param hydroelastic_modulus A multiplier that maps penetration to pressure.

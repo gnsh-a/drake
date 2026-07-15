@@ -417,6 +417,7 @@ GTEST_TEST(Hydroelastic, GeometriesPopulationAndQuery) {
 
 GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   const Box box(2.0, 3.0, 4.0);
+  const Sphere sphere(1.25);
   ProximityProperties voxel_properties;
   AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &voxel_properties);
 
@@ -448,6 +449,15 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   EXPECT_EQ(geometries.hydroelastic_type(voxel_id),
             HydroelasticType::kCompliant);
 
+  const GeometryId sphere_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(sphere, sphere_id, voxel_properties);
+  const CompliantGeometry& sphere_voxel =
+      geometries.compliant_geometry(sphere_id);
+  ASSERT_TRUE(sphere_voxel.is_voxel_sdf());
+  EXPECT_EQ(sphere_voxel.voxel_sdf().characteristic_length(), 1.25);
+  EXPECT_EQ(sphere_voxel.voxel_sdf().EvaluateSdf(Vector3d::Zero()).value,
+            -1.25);
+
   // Without the selector, Box keeps its legacy compliant mesh.
   ProximityProperties mesh_properties;
   AddCompliantHydroelasticProperties(0.5, 2e8, &mesh_properties);
@@ -455,6 +465,12 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   geometries.MaybeAddGeometry(box, mesh_id, mesh_properties);
   EXPECT_TRUE(geometries.compliant_geometry(mesh_id).is_mesh());
   EXPECT_FALSE(geometries.compliant_geometry(mesh_id).is_voxel_sdf());
+
+  // Without the selector, Sphere also keeps its legacy compliant mesh.
+  const GeometryId sphere_mesh_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(sphere, sphere_mesh_id, mesh_properties);
+  EXPECT_TRUE(geometries.compliant_geometry(sphere_mesh_id).is_mesh());
+  EXPECT_FALSE(geometries.compliant_geometry(sphere_mesh_id).is_voxel_sdf());
 
   ProximityProperties unknown(voxel_properties);
   unknown.UpdateProperty(kHydroGroup, kCompliantRepresentation,
@@ -465,18 +481,22 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
       "representation.*not_a_representation.*");
 
   DRAKE_EXPECT_THROWS_MESSAGE(
-      geometries.MaybeAddGeometry(Sphere(1.0), GeometryId::get_new_id(),
+      geometries.MaybeAddGeometry(Cylinder(1.0, 2.0), GeometryId::get_new_id(),
                                   voxel_properties),
-      ".*only supported for Box.*Sphere.*");
+      ".*only supported for Box and Sphere.*Cylinder.*");
   DRAKE_EXPECT_THROWS_MESSAGE(
-      MakeCompliantRepresentation(Sphere(1.0), voxel_properties),
-      ".*only supported for Box.*Sphere.*");
+      MakeCompliantRepresentation(Cylinder(1.0, 2.0), voxel_properties),
+      ".*only supported for Box and Sphere.*Cylinder.*");
 
   ProximityProperties with_margin(voxel_properties);
   with_margin.AddProperty(kHydroGroup, kMargin, 0.01);
   DRAKE_EXPECT_THROWS_MESSAGE(
       geometries.MaybeAddGeometry(box, GeometryId::get_new_id(), with_margin),
       ".*voxel SDF.*requires zero margin.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(sphere, GeometryId::get_new_id(),
+                                  with_margin),
+      ".*Sphere voxel SDF.*requires zero margin.*");
 }
 
 void DoTestVanished(const Shape& shape, bool expect_vanished) {

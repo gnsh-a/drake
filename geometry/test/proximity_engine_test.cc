@@ -411,6 +411,39 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
             HydroelasticType::kUndefined);
 }
 
+TEST_F(ProximityEngineTests, SphereVoxelSdfCopyConversionAndReplacement) {
+  const Sphere sphere(1.0);
+  ProximityProperties properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 1e8, &properties);
+  const GeometryId id = AddDynamic(sphere, {}, properties);
+
+  const auto& original = Tester::compliant_geometry(id, engine_).voxel_sdf();
+  EXPECT_EQ(original.characteristic_length(), 1.0);
+  EXPECT_EQ(original.EvaluateSdf(Vector3d::Zero()).value, -1.0);
+
+  ProximityEngine<double> copy(engine_);
+  const auto& copied = Tester::compliant_geometry(id, copy).voxel_sdf();
+  EXPECT_NE(&copied.sample(0, 0, 0), &original.sample(0, 0, 0));
+  EXPECT_EQ(copied.EvaluateSdf(Vector3d::Zero()).gradient, Vector3d::UnitX());
+
+  std::unique_ptr<ProximityEngine<AutoDiffXd>> converted =
+      engine_.ToScalarType<AutoDiffXd>();
+  const auto& converted_voxel =
+      Tester::compliant_geometry(id, *converted).voxel_sdf();
+  EXPECT_NE(&converted_voxel.sample(0, 0, 0), &original.sample(0, 0, 0));
+  EXPECT_EQ(converted_voxel.EvaluateSdf(Vector3d::Zero()).value, -1.0);
+
+  const InternalGeometry geometry(
+      SourceId::get_new_id(), std::make_unique<Sphere>(sphere),
+      FrameId::get_new_id(), id, "sphere_voxel", math::RigidTransformd());
+  ProximityProperties replacement;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &replacement);
+  engine_.UpdateRepresentationForNewProperties(geometry, replacement);
+  const auto& replaced = Tester::compliant_geometry(id, engine_).voxel_sdf();
+  EXPECT_EQ(replaced.voxel_width(), 0.5);
+  EXPECT_EQ(replaced.hydroelastic_modulus(), 2e8);
+}
+
 TEST_F(ProximityEngineTests, VoxelSdfContactDispatchAndFallback) {
   const Box box(2.0, 2.0, 2.0);
   ProximityProperties properties;

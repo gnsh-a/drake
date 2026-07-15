@@ -36,11 +36,12 @@ struct VoxelSdfContactPolygon {
 
 /* Calculates the contact polygon in one cubic voxel centered at `center_A`.
 
- The exact Box SDF is piecewise affine. This kernel instead uses each selected
- center gradient to define the local affine extension over this voxel. The
- returned normal points toward increasing A pressure and decreasing B pressure,
- i.e., out of B and into A. On the equal-pressure plane p_A = p_B, so clipping
- to nonnegative A pressure also clips to nonnegative B pressure.
+ Each selected center gradient defines a local affine extension over this
+ voxel. A Box SDF is piecewise affine, while a Sphere SDF is curved and this
+ extension is a local approximation. The returned normal points toward
+ increasing A pressure and decreasing B pressure, i.e., out of B and into A.
+ On the equal-pressure plane p_A = p_B, so clipping to nonnegative A pressure
+ also clips to nonnegative B pressure.
 
  @param center_A       Voxel center, expressed in frame A.
  @param voxel_width    Edge length of the cubic voxel.

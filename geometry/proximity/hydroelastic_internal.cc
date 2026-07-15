@@ -103,8 +103,8 @@ void ValidateCompliantRepresentationSelector(const ProximityProperties& props,
   if (!supports_voxel_sdf) {
     throw std::logic_error(fmt::format(
         "The '{}' compliant hydroelastic representation is only supported for "
-        "Box; cannot create it for {}",
-        selector, shape_name));
+        "{}; cannot create it for {}",
+        selector, VoxelSdfShape::supported_shape_names(), shape_name));
   }
 }
 
@@ -216,7 +216,8 @@ void Geometries::MakeShape(const ShapeType& shape, const ReifyData& data) {
     } break;
     case HydroelasticType::kCompliant: {
       ValidateCompliantRepresentationSelector(
-          data.properties, shape.type_name(), std::is_same_v<ShapeType, Box>);
+          data.properties, shape.type_name(),
+          std::is_constructible_v<VoxelSdfShape, const ShapeType&>);
       auto hydro_geometry = MakeCompliantRepresentation(shape, data.properties);
       if (hydro_geometry) {
         if (hydro_geometry->is_mesh() && is_primitive(shape) &&
@@ -434,9 +435,24 @@ void WarnNoCompliantRepresentation(std::string_view shape_type_name) {
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Sphere& sphere, const ProximityProperties& props) {
-  ValidateCompliantRepresentationSelector(props, sphere.type_name(), false);
+  ValidateCompliantRepresentationSelector(props, sphere.type_name(), true);
   const double margin = NonNegativeDouble("Sphere", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
+
+  if (props.HasProperty(kHydroGroup, kCompliantRepresentation)) {
+    if (margin != 0.0) {
+      throw std::logic_error(
+          "The Sphere voxel SDF compliant representation requires zero "
+          "margin");
+    }
+    PositiveDouble validator("Sphere voxel SDF", "compliant");
+    const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
+    const double hydroelastic_modulus =
+        validator.Extract(props, kHydroGroup, kElastic);
+    return CompliantGeometry(
+        VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus));
+  }
+
   const Sphere inflated_sphere(sphere.radius() + margin);
 
   PositiveDouble positive_validator("Sphere", "compliant");
