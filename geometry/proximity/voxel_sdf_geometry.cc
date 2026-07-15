@@ -45,6 +45,11 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus) {}
 
+VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
+                                   double hydroelastic_modulus)
+    : VoxelSdfGeometry(VoxelSdfShape(sphere), voxel_width,
+                       hydroelastic_modulus) {}
+
 VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                                    double hydroelastic_modulus)
     : shape_(std::move(shape)),
@@ -81,7 +86,7 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
   const Vector3<double> extent = 2.0 * shape_.bounding_box_half_widths();
   for (int a = 0; a < 3; ++a) {
     cell_counts_[a] = CalcCellCount(extent[a], voxel_width_, a, shape_name);
-    // Centering the padded grid about the Box makes its padding symmetric.
+    // Centering the padded grid about the shape makes its padding symmetric.
     lower_cell_boundary_[a] = -0.5 * cell_counts_[a] * voxel_width_;
     if (!std::isfinite(lower_cell_boundary_[a])) {
       throw std::logic_error(
@@ -125,8 +130,8 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
               fmt::format("The {} voxel SDF sample ({}, {}, {}) is not finite",
                           shape_name, i, j, k));
         }
-        // At medial-axis ties, the chosen Box gradient follows Drake's public
-        // point-distance implementation.
+        // At non-unique gradients, including Box medial-axis ties and the
+        // Sphere center, the choice follows Drake's point-distance code.
         samples_[linear_index(i, j, k)] = sdf;
       }
     }

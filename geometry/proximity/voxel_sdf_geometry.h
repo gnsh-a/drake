@@ -20,6 +20,8 @@ class VoxelSdfGeometry {
 
   VoxelSdfGeometry(const Box& box, double voxel_width,
                    double hydroelastic_modulus);
+  VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
+                   double hydroelastic_modulus);
   VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                    double hydroelastic_modulus);
 

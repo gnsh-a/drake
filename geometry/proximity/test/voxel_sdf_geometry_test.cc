@@ -103,6 +103,34 @@ GTEST_TEST(VoxelSdfGeometryTest, CachedSamplesMatchPointDistance) {
   }
 }
 
+GTEST_TEST(VoxelSdfGeometryTest, SphereGridAndCachedSamples) {
+  const Sphere sphere(2.5);
+  const VoxelSdfGeometry dut(sphere, 1.0, 10.0);
+  EXPECT_TRUE(CompareMatrices(dut.cell_counts(), Vector3<int>(5, 5, 5)));
+  EXPECT_TRUE(
+      CompareMatrices(dut.lower_cell_boundary(), Vector3d::Constant(-2.5)));
+  EXPECT_EQ(dut.characteristic_length(), 2.5);
+  EXPECT_EQ(dut.pressure_scale(), 4.0);
+
+  const auto& center = dut.sample(2, 2, 2);
+  EXPECT_EQ(dut.cell_center(2, 2, 2), Vector3d::Zero());
+  EXPECT_EQ(center.value, -2.5);
+  EXPECT_EQ(center.gradient, Vector3d::UnitX());
+
+  const auto& interior = dut.sample(3, 2, 2);
+  EXPECT_EQ(interior.value, -1.5);
+  EXPECT_EQ(interior.gradient, Vector3d::UnitX());
+
+  const auto& corner = dut.sample(4, 4, 4);
+  EXPECT_GT(corner.value, 0.0);
+  EXPECT_TRUE(CompareMatrices(corner.gradient, Vector3d::Ones().normalized()));
+
+  const VoxelSdfGeometry one_cell(Sphere(0.25), 1.0, 10.0);
+  EXPECT_TRUE(CompareMatrices(one_cell.cell_counts(), Vector3<int>(1, 1, 1)));
+  EXPECT_EQ(one_cell.cell_center(0, 0, 0), Vector3d::Zero());
+  EXPECT_EQ(one_cell.sample(0, 0, 0).value, -0.25);
+}
+
 GTEST_TEST(VoxelSdfGeometryTest, CopyAndMoveOwnership) {
   const VoxelSdfGeometry original(Box(2.0, 3.0, 4.0), 1.0, 12.0);
 
@@ -151,6 +179,12 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
                               ".*pressure scale.*finite.*positive.*");
   DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Box(denorm, 1.0, 1.0), 1.0, 1.0),
                               ".*characteristic length.*finite.*positive.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Sphere(0.5), 1.0, max),
+                              ".*Sphere.*pressure scale.*finite.*positive.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Sphere(max), max, denorm),
+                              ".*Sphere.*pressure scale.*finite.*positive.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Sphere(max), max, 1.0),
+                              ".*Sphere.*too many cells.*");
 
   // Fused center arithmetic keeps representable coordinates finite even when
   // the multiplication h * (i + 0.5) would overflow before cancellation.
@@ -164,6 +198,9 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
       static_cast<double>(std::numeric_limits<int>::max()) + 1.0;
   DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(box, 1.0 / too_many, 1.0),
                               ".*too many cells.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(Sphere(1.0), 1.0 / too_many, 1.0),
+      ".*Sphere.*too many cells.*");
 
   const double max_count = static_cast<double>(std::numeric_limits<int>::max());
   DRAKE_EXPECT_THROWS_MESSAGE(

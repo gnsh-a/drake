@@ -1,5 +1,6 @@
 #include "drake/geometry/proximity/voxel_sdf_shape.h"
 
+#include <type_traits>
 #include <utility>
 
 #include <fcl/fcl.h>
@@ -17,6 +18,10 @@ namespace hydroelastic {
 namespace {
 
 using Eigen::Vector3d;
+
+static_assert(std::is_constructible_v<VoxelSdfShape, const Box&>);
+static_assert(std::is_constructible_v<VoxelSdfShape, const Sphere&>);
+static_assert(!std::is_constructible_v<VoxelSdfShape, const Cylinder&>);
 
 GTEST_TEST(VoxelSdfShapeTest, BoxEvaluationAndGeometryData) {
   const Box box(2.0, 4.0, 6.0);
@@ -38,6 +43,32 @@ GTEST_TEST(VoxelSdfShapeTest, BoxEvaluationAndGeometryData) {
     EXPECT_EQ(actual.value, expected.distance);
     EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
   }
+}
+
+GTEST_TEST(VoxelSdfShapeTest, SphereEvaluationAndGeometryData) {
+  const Sphere sphere(2.5);
+  const VoxelSdfShape dut(sphere);
+  EXPECT_EQ(dut.shape_name(), "Sphere");
+  EXPECT_TRUE(
+      CompareMatrices(dut.bounding_box_half_widths(), Vector3d::Constant(2.5)));
+  EXPECT_EQ(dut.characteristic_length(), 2.5);
+
+  const fcl::Sphered fcl_sphere(sphere.radius());
+  for (const Vector3d& p_GQ :
+       {Vector3d(0.0, 0.0, 0.0), Vector3d(1.0, 0.0, 0.0),
+        Vector3d(-1.0, 0.0, 0.0), Vector3d(0.0, 1.5, 2.0),
+        Vector3d(2.0, 2.0, 2.0)}) {
+    const VoxelSdfShape::Sample actual = dut.Evaluate(p_GQ);
+    point_distance::DistanceToPoint<double> query(
+        GeometryId::get_new_id(), math::RigidTransformd(), p_GQ);
+    const SignedDistanceToPoint<double> expected = query(fcl_sphere);
+    EXPECT_EQ(actual.value, expected.distance);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
+  }
+
+  const auto center = dut.Evaluate(Vector3d::Zero());
+  EXPECT_EQ(center.value, -sphere.radius());
+  EXPECT_EQ(center.gradient, Vector3d::UnitX());
 }
 
 GTEST_TEST(VoxelSdfShapeTest, CopyAndMovePreserveValue) {

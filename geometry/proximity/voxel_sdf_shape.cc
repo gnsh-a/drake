@@ -13,6 +13,9 @@ namespace hydroelastic {
 VoxelSdfShape::VoxelSdfShape(const Box& box)
     : data_(BoxData{box.size() / 2.0}) {}
 
+VoxelSdfShape::VoxelSdfShape(const Sphere& sphere)
+    : data_(SphereData{sphere.radius()}) {}
+
 VoxelSdfShape::Sample VoxelSdfShape::Evaluate(
     const Vector3<double>& p_GQ) const {
   DRAKE_DEMAND(p_GQ.allFinite());
@@ -47,6 +50,10 @@ std::string_view VoxelSdfShape::shape_name() const {
       data_);
 }
 
+std::string_view VoxelSdfShape::supported_shape_names() {
+  return "Box and Sphere";
+}
+
 VoxelSdfShape::Sample VoxelSdfShape::DoEvaluate(const BoxData& box,
                                                 const Vector3<double>& p_GQ) {
   const auto distance =
@@ -67,6 +74,30 @@ double VoxelSdfShape::DoCalcCharacteristicLength(const BoxData& box) {
 
 std::string_view VoxelSdfShape::DoGetShapeName(const BoxData&) {
   return "Box";
+}
+
+VoxelSdfShape::Sample VoxelSdfShape::DoEvaluate(const SphereData& sphere,
+                                                const Vector3<double>& p_GQ) {
+  const fcl::Sphered fcl_sphere(sphere.radius);
+  Vector3<double> nearest;
+  Vector3<double> gradient;
+  double distance{};
+  point_distance::SphereDistanceInSphereFrame(fcl_sphere, p_GQ, &nearest,
+                                              &distance, &gradient);
+  return Sample{distance, gradient};
+}
+
+Vector3<double> VoxelSdfShape::DoCalcBoundingBoxHalfWidths(
+    const SphereData& sphere) {
+  return Vector3<double>::Constant(sphere.radius);
+}
+
+double VoxelSdfShape::DoCalcCharacteristicLength(const SphereData& sphere) {
+  return sphere.radius;
+}
+
+std::string_view VoxelSdfShape::DoGetShapeName(const SphereData&) {
+  return "Sphere";
 }
 
 }  // namespace hydroelastic

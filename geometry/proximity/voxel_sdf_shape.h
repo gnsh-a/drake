@@ -24,6 +24,7 @@ class VoxelSdfShape {
   };
 
   explicit VoxelSdfShape(const Box& box);
+  explicit VoxelSdfShape(const Sphere& sphere);
 
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VoxelSdfShape);
 
@@ -31,10 +32,14 @@ class VoxelSdfShape {
   Vector3<double> bounding_box_half_widths() const;
   double characteristic_length() const;
   std::string_view shape_name() const;
+  static std::string_view supported_shape_names();
 
  private:
   struct BoxData {
     Vector3<double> half_widths;
+  };
+  struct SphereData {
+    double radius{};
   };
 
   static Sample DoEvaluate(const BoxData& box, const Vector3<double>& p_GQ);
@@ -42,7 +47,13 @@ class VoxelSdfShape {
   static double DoCalcCharacteristicLength(const BoxData& box);
   static std::string_view DoGetShapeName(const BoxData& box);
 
-  std::variant<BoxData> data_;
+  static Sample DoEvaluate(const SphereData& sphere,
+                           const Vector3<double>& p_GQ);
+  static Vector3<double> DoCalcBoundingBoxHalfWidths(const SphereData& sphere);
+  static double DoCalcCharacteristicLength(const SphereData& sphere);
+  static std::string_view DoGetShapeName(const SphereData& sphere);
+
+  std::variant<BoxData, SphereData> data_;
 };
 
 }  // namespace hydroelastic

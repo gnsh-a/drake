@@ -582,7 +582,7 @@ bool Callback(fcl::CollisionObjectd* object_A_ptr,
 }
 
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    (&Callback<T>));
+    (&Callback<T>, &SphereDistanceInSphereFrame<T>));
 
 }  // namespace point_distance
 }  // namespace internal
