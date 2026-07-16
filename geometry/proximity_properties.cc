@@ -21,6 +21,7 @@ const char* const kComplianceType = "compliance_type";
 const char* const kSlabThickness = "slab_thickness";
 const char* const kMargin = "margin";
 const char* const kCompliantRepresentation = "compliant_representation";
+const char* const kVoxelSdfEvaluationMode = "voxel_sdf_evaluation_mode";
 
 namespace {
 
@@ -150,6 +151,53 @@ void AddCompliantHydroelasticProperties(double hydroelastic_modulus,
   properties->AddProperty(internal::kHydroGroup, internal::kComplianceType,
                           internal::HydroelasticType::kCompliant);
 }
+
+void ValidateVoxelSdfEvaluationMode(VoxelSdfEvaluationMode mode) {
+  switch (mode) {
+    case VoxelSdfEvaluationMode::kPrimitiveAffine:
+    case VoxelSdfEvaluationMode::kSampledTrilinear:
+      return;
+  }
+  throw std::logic_error("The voxel SDF evaluation mode is invalid");
+}
+
+void ValidateVoxelSdfProperties(double voxel_width,
+                                double hydroelastic_modulus) {
+  if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
+    throw std::logic_error(fmt::format(
+        "The voxel width must be finite and strictly positive; given {}",
+        voxel_width));
+  }
+  if (!(hydroelastic_modulus > 0.0 && std::isfinite(hydroelastic_modulus))) {
+    throw std::logic_error(fmt::format(
+        "The hydroelastic modulus must be finite and strictly positive; given "
+        "{}",
+        hydroelastic_modulus));
+  }
+}
+
+void AddVoxelSdfProperties(double voxel_width, double hydroelastic_modulus,
+                           std::optional<VoxelSdfEvaluationMode> mode,
+                           ProximityProperties* properties) {
+  DRAKE_DEMAND(properties != nullptr);
+  // Validate all caller values before adding any property so a bad request
+  // cannot partially modify the caller's set.
+  ValidateVoxelSdfProperties(voxel_width, hydroelastic_modulus);
+  if (mode.has_value()) ValidateVoxelSdfEvaluationMode(*mode);
+  properties->AddProperty(internal::kHydroGroup, internal::kRezHint,
+                          voxel_width);
+  properties->AddProperty(internal::kHydroGroup, internal::kElastic,
+                          hydroelastic_modulus);
+  properties->AddProperty(internal::kHydroGroup, internal::kComplianceType,
+                          internal::HydroelasticType::kCompliant);
+  properties->AddProperty(internal::kHydroGroup,
+                          internal::kCompliantRepresentation,
+                          std::string("voxel_sdf"));
+  if (mode.has_value()) {
+    properties->AddProperty(internal::kHydroGroup,
+                            internal::kVoxelSdfEvaluationMode, *mode);
+  }
+}
 }  // namespace
 
 void AddCompliantHydroelasticProperties(double resolution_hint,
@@ -164,29 +212,14 @@ void AddCompliantHydroelasticProperties(double resolution_hint,
 void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     ProximityProperties* properties) {
-  DRAKE_DEMAND(properties != nullptr);
-  // Validate everything up front so invalid inputs never partially modify the
-  // caller's property set.
-  if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
-    throw std::logic_error(fmt::format(
-        "The voxel width must be finite and strictly positive; given {}",
-        voxel_width));
-  }
-  if (!(hydroelastic_modulus > 0.0 && std::isfinite(hydroelastic_modulus))) {
-    throw std::logic_error(fmt::format(
-        "The hydroelastic modulus must be finite and strictly positive; given "
-        "{}",
-        hydroelastic_modulus));
-  }
-  properties->AddProperty(internal::kHydroGroup, internal::kRezHint,
-                          voxel_width);
-  properties->AddProperty(internal::kHydroGroup, internal::kElastic,
-                          hydroelastic_modulus);
-  properties->AddProperty(internal::kHydroGroup, internal::kComplianceType,
-                          internal::HydroelasticType::kCompliant);
-  properties->AddProperty(internal::kHydroGroup,
-                          internal::kCompliantRepresentation,
-                          std::string("voxel_sdf"));
+  AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, std::nullopt,
+                        properties);
+}
+
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    VoxelSdfEvaluationMode mode, ProximityProperties* properties) {
+  AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, mode, properties);
 }
 
 void AddCompliantHydroelasticPropertiesForHalfSpace(

@@ -521,6 +521,7 @@ drake_cc_library(
     deps = [
         ":voxel_sdf_shape",
         "//common:essential",
+        "//geometry:proximity_properties",
         "@fmt",
     ],
 )

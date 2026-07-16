@@ -373,17 +373,21 @@ TEST_F(ProximityEngineTests, ProcessHydroelasticProperties) {
 TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
   const Box box(1.0, 2.0, 3.0);
   ProximityProperties properties;
-  AddCompliantHydroelasticVoxelSdfProperties(0.25, 1e8, &properties);
+  AddCompliantHydroelasticVoxelSdfProperties(
+      0.25, 1e8, VoxelSdfEvaluationMode::kSampledTrilinear, &properties);
   const GeometryId id = AddDynamic(box, {}, properties);
 
   const auto& original = Tester::compliant_geometry(id, engine_).voxel_sdf();
   ASSERT_EQ(original.voxel_width(), 0.25);
+  ASSERT_EQ(original.evaluation_mode(),
+            VoxelSdfEvaluationMode::kSampledTrilinear);
   const Vector3<int> original_counts = original.cell_counts();
 
   ProximityEngine<double> copy(engine_);
   const auto& copied = Tester::compliant_geometry(id, copy).voxel_sdf();
   EXPECT_NE(&copied.sample(0, 0, 0), &original.sample(0, 0, 0));
   EXPECT_EQ(copied.sample(0, 0, 0).value, original.sample(0, 0, 0).value);
+  EXPECT_EQ(copied.evaluation_mode(), original.evaluation_mode());
 
   std::unique_ptr<ProximityEngine<AutoDiffXd>> converted =
       engine_.ToScalarType<AutoDiffXd>();
@@ -394,9 +398,11 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
       CompareMatrices(converted_voxel.cell_counts(), original.cell_counts()));
   EXPECT_EQ(converted_voxel.sample(0, 0, 0).value,
             original.sample(0, 0, 0).value);
+  EXPECT_EQ(converted_voxel.evaluation_mode(), original.evaluation_mode());
 
   ProximityProperties replacement;
-  AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &replacement);
+  AddCompliantHydroelasticVoxelSdfProperties(
+      0.5, 2e8, VoxelSdfEvaluationMode::kPrimitiveAffine, &replacement);
   const InternalGeometry geometry(
       SourceId::get_new_id(), std::make_unique<Box>(box), FrameId::get_new_id(),
       id, "voxel", math::RigidTransformd());
@@ -404,6 +410,8 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
   const auto& replaced = Tester::compliant_geometry(id, engine_).voxel_sdf();
   EXPECT_EQ(replaced.voxel_width(), 0.5);
   EXPECT_EQ(replaced.hydroelastic_modulus(), 2e8);
+  EXPECT_EQ(replaced.evaluation_mode(),
+            VoxelSdfEvaluationMode::kPrimitiveAffine);
   EXPECT_FALSE(CompareMatrices(replaced.cell_counts(), original_counts));
 
   engine_.RemoveGeometry(id, true);

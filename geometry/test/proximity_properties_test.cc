@@ -25,6 +25,7 @@ using internal::kMaterialGroup;
 using internal::kPointStiffness;
 using internal::kRezHint;
 using internal::kSlabThickness;
+using internal::kVoxelSdfEvaluationMode;
 using CoulombFrictiond = multibody::CoulombFriction<double>;
 
 GTEST_TEST(ProximityPropertiesTest, AddContactMaterial) {
@@ -166,10 +167,19 @@ GTEST_TEST(ProximityPropertiesTest, AddCompliantVoxelSdfProperties) {
   EXPECT_EQ(
       props.GetProperty<std::string>(kHydroGroup, kCompliantRepresentation),
       "voxel_sdf");
+  EXPECT_FALSE(props.HasProperty(kHydroGroup, kVoxelSdfEvaluationMode));
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       AddCompliantHydroelasticVoxelSdfProperties(voxel_width, modulus, &props),
       ".*Trying to add property.*name already exists.*");
+
+  ProximityProperties sampled_props;
+  AddCompliantHydroelasticVoxelSdfProperties(
+      voxel_width, modulus, VoxelSdfEvaluationMode::kSampledTrilinear,
+      &sampled_props);
+  EXPECT_EQ(sampled_props.GetProperty<VoxelSdfEvaluationMode>(
+                kHydroGroup, kVoxelSdfEvaluationMode),
+            VoxelSdfEvaluationMode::kSampledTrilinear);
 }
 
 GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
@@ -180,6 +190,7 @@ GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
     EXPECT_FALSE(props.HasProperty(kHydroGroup, kElastic));
     EXPECT_FALSE(props.HasProperty(kHydroGroup, kComplianceType));
     EXPECT_FALSE(props.HasProperty(kHydroGroup, kCompliantRepresentation));
+    EXPECT_FALSE(props.HasProperty(kHydroGroup, kVoxelSdfEvaluationMode));
   };
 
   for (double bad_width : {0.0, -1.0, nan, infinity}) {
@@ -194,6 +205,14 @@ GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
     DRAKE_EXPECT_THROWS_MESSAGE(
         AddCompliantHydroelasticVoxelSdfProperties(1.0, bad_modulus, &props),
         ".*modulus.*finite.*positive.*");
+    expect_unchanged(props);
+  }
+  {
+    ProximityProperties props;
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        AddCompliantHydroelasticVoxelSdfProperties(
+            1.0, 1.0, static_cast<VoxelSdfEvaluationMode>(-1), &props),
+        ".*evaluation mode.*invalid.*");
     expect_unchanged(props);
   }
 }

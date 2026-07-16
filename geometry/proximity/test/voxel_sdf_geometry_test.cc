@@ -51,6 +51,50 @@ GTEST_TEST(VoxelSdfGeometryTest, GridConstruction) {
   EXPECT_EQ(&exact.sample(0, 0, 1), first + 6);
 }
 
+GTEST_TEST(VoxelSdfGeometryTest, SampledGridStorage) {
+  const Box box(2.0, 3.0, 4.0);
+  const VoxelSdfGeometry primitive(box, 1.0, 12.0);
+  const VoxelSdfGeometry sampled(box, 1.0, 12.0,
+                                 VoxelSdfEvaluationMode::kSampledTrilinear);
+
+  EXPECT_EQ(primitive.evaluation_mode(),
+            VoxelSdfEvaluationMode::kPrimitiveAffine);
+  EXPECT_EQ(sampled.evaluation_mode(),
+            VoxelSdfEvaluationMode::kSampledTrilinear);
+  EXPECT_TRUE(CompareMatrices(sampled.cell_counts(), primitive.cell_counts()));
+  EXPECT_TRUE(CompareMatrices(sampled.lower_cell_boundary(),
+                              primitive.lower_cell_boundary()));
+  EXPECT_TRUE(
+      CompareMatrices(sampled.storage_counts(),
+                      sampled.cell_counts() + Vector3<int>::Constant(4)));
+  EXPECT_TRUE(
+      CompareMatrices(primitive.storage_counts(), primitive.cell_counts()));
+
+  for (int k = 0; k < sampled.cell_counts()[2]; ++k) {
+    for (int j = 0; j < sampled.cell_counts()[1]; ++j) {
+      for (int i = 0; i < sampled.cell_counts()[0]; ++i) {
+        EXPECT_TRUE(CompareMatrices(sampled.cell_center(i, j, k),
+                                    primitive.cell_center(i, j, k)));
+        EXPECT_EQ(&sampled.sample(i, j, k),
+                  &sampled.stored_sample(i + 2, j + 2, k + 2));
+      }
+    }
+  }
+
+  EXPECT_TRUE(CompareMatrices(sampled.stored_sample_center(0, 0, 0),
+                              Vector3d(-2.5, -3.0, -3.5)));
+  const Vector3<int> last = sampled.storage_counts() - Vector3<int>::Ones();
+  EXPECT_TRUE(
+      CompareMatrices(sampled.stored_sample_center(last[0], last[1], last[2]),
+                      Vector3d(2.5, 3.0, 3.5)));
+  for (const Vector3<int>& index :
+       {Vector3<int>(0, 0, 0), last, Vector3<int>(1, 3, 4)}) {
+    const auto& padding = sampled.stored_sample(index[0], index[1], index[2]);
+    EXPECT_TRUE(std::isfinite(padding.value));
+    EXPECT_TRUE(padding.gradient.allFinite());
+  }
+}
+
 GTEST_TEST(VoxelSdfGeometryTest, CachedSamplesMatchPointDistance) {
   const Box box(5.0, 5.0, 5.0);
   const VoxelSdfGeometry dut(box, 1.0, 1e7);
@@ -142,15 +186,18 @@ GTEST_TEST(VoxelSdfGeometryTest, AffineBranchAccess) {
   const VoxelSdfGeometry box(Box(2.0, 4.0, 6.0), 1.0, 10.0);
   EXPECT_EQ(box.CalcCellSdfBranches(1, 2, 3).size(), 6u);
   EXPECT_EQ(box.EvaluateSdfBranches(Vector3d(0.25, 0.5, 0.75)).size(), 6u);
+
 }
 
 GTEST_TEST(VoxelSdfGeometryTest, CopyAndMoveOwnership) {
-  const VoxelSdfGeometry original(Box(2.0, 3.0, 4.0), 1.0, 12.0);
+  const VoxelSdfGeometry original(Box(2.0, 3.0, 4.0), 1.0, 12.0,
+                                  VoxelSdfEvaluationMode::kSampledTrilinear);
 
   VoxelSdfGeometry copy_constructed(original);
   EXPECT_NE(&copy_constructed.sample(0, 0, 0), &original.sample(0, 0, 0));
   EXPECT_EQ(copy_constructed.sample(0, 0, 0).value,
             original.sample(0, 0, 0).value);
+  EXPECT_EQ(copy_constructed.evaluation_mode(), original.evaluation_mode());
 
   VoxelSdfGeometry copy_assigned(Box(1.0, 1.0, 1.0), 1.0, 1.0);
   copy_assigned = original;
@@ -162,6 +209,8 @@ GTEST_TEST(VoxelSdfGeometryTest, CopyAndMoveOwnership) {
   VoxelSdfGeometry move_constructed(std::move(copy_constructed));
   EXPECT_EQ(&move_constructed.sample(0, 0, 0), moved_data);
   EXPECT_EQ(move_constructed.hydroelastic_modulus(), 12.0);
+  EXPECT_EQ(move_constructed.evaluation_mode(),
+            VoxelSdfEvaluationMode::kSampledTrilinear);
 
   VoxelSdfGeometry move_assigned(Box(1.0, 1.0, 1.0), 1.0, 1.0);
   moved_data = &copy_assigned.sample(0, 0, 0);
@@ -219,6 +268,21 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
   DRAKE_EXPECT_THROWS_MESSAGE(
       VoxelSdfGeometry(Box(max_count, max_count, max_count), 1.0, 1.0),
       ".*sample count overflows.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(Box(max_count, 1.0, 1.0), 1.0, 1.0,
+                       VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*padded sample count overflows.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(Box(max_count - 4.0, max_count - 4.0, max_count - 4.0),
+                       1.0, 1.0, VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*sample count overflows.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(Box(max, 1.0, 1.0), 0.75 * max, 1.0,
+                       VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*padded sample coordinates.*finite.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(box, 1.0, 1.0, static_cast<VoxelSdfEvaluationMode>(-1)),
+      ".*evaluation mode.*invalid.*");
 }
 
 }  // namespace

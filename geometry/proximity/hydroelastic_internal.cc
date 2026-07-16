@@ -449,8 +449,11 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
     const double hydroelastic_modulus =
         validator.Extract(props, kHydroGroup, kElastic);
-    return CompliantGeometry(
-        VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus));
+    const VoxelSdfEvaluationMode evaluation_mode =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
+                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
+    return CompliantGeometry(VoxelSdfGeometry(
+        sphere, voxel_width, hydroelastic_modulus, evaluation_mode));
   }
 
   const Sphere inflated_sphere(sphere.radius() + margin);
@@ -492,8 +495,11 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
     const double hydroelastic_modulus =
         validator.Extract(props, kHydroGroup, kElastic);
-    return CompliantGeometry(
-        VoxelSdfGeometry(box, voxel_width, hydroelastic_modulus));
+    const VoxelSdfEvaluationMode evaluation_mode =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
+                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
+    return CompliantGeometry(VoxelSdfGeometry(
+        box, voxel_width, hydroelastic_modulus, evaluation_mode));
   }
 
   // Define the shape of the "inflated" hydroelastic geometry to include the

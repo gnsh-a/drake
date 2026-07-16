@@ -39,25 +39,67 @@ size_t CheckedMultiply(size_t a, size_t b, std::string_view shape_name) {
   return a * b;
 }
 
+int CheckedStorageCount(int core_count, std::string_view shape_name, int axis) {
+  constexpr int padding_count = 4;
+  if (core_count > std::numeric_limits<int>::max() - padding_count) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF padded sample count overflows int on axis {}",
+        shape_name, axis));
+  }
+  return core_count + padding_count;
+}
+
+void ValidateEvaluationMode(VoxelSdfEvaluationMode mode,
+                            std::string_view shape_name) {
+  switch (mode) {
+    case VoxelSdfEvaluationMode::kPrimitiveAffine:
+    case VoxelSdfEvaluationMode::kSampledTrilinear:
+      return;
+  }
+  throw std::logic_error(
+      fmt::format("The {} voxel SDF evaluation mode is invalid", shape_name));
+}
+
 }  // namespace
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
                                    double hydroelastic_modulus)
-    : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus) {}
+    : VoxelSdfGeometry(box, voxel_width, hydroelastic_modulus,
+                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode)
+    : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus,
+                       evaluation_mode) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
                                    double hydroelastic_modulus)
-    : VoxelSdfGeometry(VoxelSdfShape(sphere), voxel_width,
-                       hydroelastic_modulus) {}
+    : VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus,
+                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode)
+    : VoxelSdfGeometry(VoxelSdfShape(sphere), voxel_width, hydroelastic_modulus,
+                       evaluation_mode) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                                    double hydroelastic_modulus)
+    : VoxelSdfGeometry(std::move(shape), voxel_width, hydroelastic_modulus,
+                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode)
     : shape_(std::move(shape)),
       voxel_width_(voxel_width),
       hydroelastic_modulus_(hydroelastic_modulus),
       characteristic_length_(shape_.characteristic_length()),
-      pressure_scale_(0.0) {
+      pressure_scale_(0.0),
+      evaluation_mode_(evaluation_mode) {
   const std::string shape_name(shape_.shape_name());
+  ValidateEvaluationMode(evaluation_mode_, shape_name);
   if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
     throw std::logic_error(fmt::format(
         "The {} voxel SDF width must be finite and strictly positive",
@@ -93,13 +135,28 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
           fmt::format("The {} voxel SDF grid boundary is not finite on axis {}",
                       shape_name, a));
     }
+    storage_counts_[a] =
+        evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear
+            ? CheckedStorageCount(cell_counts_[a], shape_name, a)
+            : cell_counts_[a];
+  }
+
+  // Check the padded coordinate extrema before allocating. All stored centers
+  // lie between these two points on each axis.
+  const Vector3<double> first_center = stored_sample_center(0, 0, 0);
+  const Vector3<double> last_center = stored_sample_center(
+      storage_counts_[0] - 1, storage_counts_[1] - 1, storage_counts_[2] - 1);
+  if (!first_center.allFinite() || !last_center.allFinite()) {
+    throw std::logic_error(
+        fmt::format("The {} voxel SDF padded sample coordinates are not finite",
+                    shape_name));
   }
 
   size_t sample_count =
-      CheckedMultiply(static_cast<size_t>(cell_counts_[0]),
-                      static_cast<size_t>(cell_counts_[1]), shape_name);
+      CheckedMultiply(static_cast<size_t>(storage_counts_[0]),
+                      static_cast<size_t>(storage_counts_[1]), shape_name);
   sample_count = CheckedMultiply(
-      sample_count, static_cast<size_t>(cell_counts_[2]), shape_name);
+      sample_count, static_cast<size_t>(storage_counts_[2]), shape_name);
   if (sample_count > samples_.max_size()) {
     throw std::logic_error(fmt::format(
         "The {} voxel SDF sample count cannot be represented by a vector",
@@ -115,16 +172,18 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
         "The {} voxel SDF samples cannot be allocated safely", shape_name));
   }
 
-  for (int k = 0; k < cell_counts_[2]; ++k) {
-    for (int j = 0; j < cell_counts_[1]; ++j) {
-      for (int i = 0; i < cell_counts_[0]; ++i) {
-        const Vector3<double> center = cell_center(i, j, k);
+  for (int k = 0; k < storage_counts_[2]; ++k) {
+    for (int j = 0; j < storage_counts_[1]; ++j) {
+      for (int i = 0; i < storage_counts_[0]; ++i) {
+        const Vector3<double> center = stored_sample_center(i, j, k);
         if (!center.allFinite()) {
           throw std::logic_error(fmt::format(
-              "The {} voxel SDF cell center ({}, {}, {}) is not finite",
+              "The {} voxel SDF sample center ({}, {}, {}) is not finite",
               shape_name, i, j, k));
         }
-        const SdfSample sdf = EvaluateSdf(center);
+        // Analytical shape evaluation is registration-time work. In sampled
+        // mode, all later off-grid queries use this immutable stored lattice.
+        const SdfSample sdf = shape_.Evaluate(center);
         if (!sdf.gradient.allFinite() || !std::isfinite(sdf.value)) {
           throw std::logic_error(
               fmt::format("The {} voxel SDF sample ({}, {}, {}) is not finite",
@@ -132,7 +191,7 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
         }
         // At non-unique gradients, including Box medial-axis ties and the
         // Sphere center, the choice follows Drake's point-distance code.
-        samples_[linear_index(i, j, k)] = sdf;
+        samples_[storage_linear_index(i, j, k)] = sdf;
       }
     }
   }
@@ -142,19 +201,39 @@ Vector3<double> VoxelSdfGeometry::cell_center(int i, int j, int k) const {
   DRAKE_DEMAND(i >= 0 && i < cell_counts_[0]);
   DRAKE_DEMAND(j >= 0 && j < cell_counts_[1]);
   DRAKE_DEMAND(k >= 0 && k < cell_counts_[2]);
-  // Fused multiply-add avoids overflowing the intermediate h * (index + 0.5)
-  // when its sum with the negative lower boundary is representable.
-  return Vector3<double>(std::fma(voxel_width_, static_cast<double>(i) + 0.5,
-                                  lower_cell_boundary_[0]),
-                         std::fma(voxel_width_, static_cast<double>(j) + 0.5,
-                                  lower_cell_boundary_[1]),
-                         std::fma(voxel_width_, static_cast<double>(k) + 0.5,
-                                  lower_cell_boundary_[2]));
+  const int offset = core_storage_offset();
+  return stored_sample_center(i + offset, j + offset, k + offset);
 }
 
 const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::sample(int i, int j,
                                                             int k) const {
-  return samples_[linear_index(i, j, k)];
+  DRAKE_DEMAND(i >= 0 && i < cell_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < cell_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < cell_counts_[2]);
+  const int offset = core_storage_offset();
+  return stored_sample(i + offset, j + offset, k + offset);
+}
+
+Vector3<double> VoxelSdfGeometry::stored_sample_center(int i, int j,
+                                                       int k) const {
+  DRAKE_DEMAND(i >= 0 && i < storage_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < storage_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < storage_counts_[2]);
+  const int offset = core_storage_offset();
+  // Fused multiply-add avoids overflowing the intermediate h * coordinate
+  // when its sum with the negative lower boundary is representable.
+  return Vector3<double>(
+      std::fma(voxel_width_, static_cast<double>(i - offset) + 0.5,
+               lower_cell_boundary_[0]),
+      std::fma(voxel_width_, static_cast<double>(j - offset) + 0.5,
+               lower_cell_boundary_[1]),
+      std::fma(voxel_width_, static_cast<double>(k - offset) + 0.5,
+               lower_cell_boundary_[2]));
+}
+
+const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::stored_sample(
+    int i, int j, int k) const {
+  return samples_[storage_linear_index(i, j, k)];
 }
 
 VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
@@ -162,24 +241,30 @@ VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
   return shape_.Evaluate(p_GQ);
 }
 
-std::vector<VoxelSdfGeometry::SdfBranch>
-VoxelSdfGeometry::CalcCellSdfBranches(int i, int j, int k) const {
+std::vector<VoxelSdfGeometry::SdfBranch> VoxelSdfGeometry::CalcCellSdfBranches(
+    int i, int j, int k) const {
   return shape_.CalcAffineBranches(cell_center(i, j, k), sample(i, j, k));
 }
 
-std::vector<VoxelSdfGeometry::SdfBranch>
-VoxelSdfGeometry::EvaluateSdfBranches(const Vector3<double>& p_GQ) const {
+std::vector<VoxelSdfGeometry::SdfBranch> VoxelSdfGeometry::EvaluateSdfBranches(
+    const Vector3<double>& p_GQ) const {
   return shape_.CalcAffineBranches(p_GQ);
 }
 
-size_t VoxelSdfGeometry::linear_index(int i, int j, int k) const {
-  DRAKE_DEMAND(i >= 0 && i < cell_counts_[0]);
-  DRAKE_DEMAND(j >= 0 && j < cell_counts_[1]);
-  DRAKE_DEMAND(k >= 0 && k < cell_counts_[2]);
+size_t VoxelSdfGeometry::storage_linear_index(int i, int j, int k) const {
+  DRAKE_DEMAND(i >= 0 && i < storage_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < storage_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < storage_counts_[2]);
   return static_cast<size_t>(i) +
-         static_cast<size_t>(cell_counts_[0]) *
+         static_cast<size_t>(storage_counts_[0]) *
              (static_cast<size_t>(j) +
-              static_cast<size_t>(cell_counts_[1]) * static_cast<size_t>(k));
+              static_cast<size_t>(storage_counts_[1]) * static_cast<size_t>(k));
+}
+
+int VoxelSdfGeometry::core_storage_offset() const {
+  return evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear
+             ? kSampledPadding
+             : 0;
 }
 
 }  // namespace hydroelastic

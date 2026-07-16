@@ -73,6 +73,8 @@ extern const char* const kMargin;          ///< Margin for hydroelastic contact.
 extern const char* const
     kCompliantRepresentation;  ///< Compliant representation
                                ///< selector property name.
+extern const char* const
+    kVoxelSdfEvaluationMode;  ///< Voxel SDF evaluation mode property name.
 
 //@}
 
@@ -99,6 +101,15 @@ std::string GetStringFromHydroelasticType(HydroelasticType hydroelastic_type);
 std::string_view to_string(const HydroelasticType& type);
 
 }  // namespace internal
+
+/** Selects how a voxel signed-distance-field compliant representation is
+ evaluated during contact queries. */
+enum class VoxelSdfEvaluationMode {
+  /** Uses primitive-aware affine branches. */
+  kPrimitiveAffine,
+  /** Uses only registration-time samples with trilinear interpolation. */
+  kSampledTrilinear,
+};
 
 /**
  * AddContactMaterial() adds general contact material properties to the given
@@ -177,6 +188,23 @@ void AddCompliantHydroelasticProperties(double resolution_hint,
 void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     ProximityProperties* properties);
+
+/** Adds properties that opt a Box or Sphere into the voxel
+ signed-distance-field compliant hydroelastic representation with the selected
+ evaluation mode.
+
+ @param voxel_width          The width of each cubic voxel, in meters.
+ @param hydroelastic_modulus A multiplier that maps penetration to pressure.
+ @param mode                 The contact-query evaluation mode.
+ @param[in,out] properties   The properties will be added to this property set.
+ @throws std::exception      If either numeric parameter is not finite and
+                             strictly positive, if `mode` is invalid, or if
+                             `properties` already has a property this function
+                             would add.
+ @pre `properties` is not nullptr. */
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    VoxelSdfEvaluationMode mode, ProximityProperties* properties);
 
 /** Compliant half spaces are handled as a special case; they do not get
  tessellated. Instead, they are treated as infinite slabs with a finite
