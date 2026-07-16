@@ -95,6 +95,75 @@ GTEST_TEST(VoxelSdfGeometryTest, SampledGridStorage) {
   }
 }
 
+GTEST_TEST(VoxelSdfGeometryTest, TrilinearInterpolation) {
+  constexpr double radius = 2.5;
+  const VoxelSdfGeometry sampled(Sphere(radius), 1.0, 10.0,
+                                 VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto result = sampled.InterpolateSdf(Vector3d(0.25, 0.5, 0.75));
+  ASSERT_TRUE(result.has_value());
+
+  // These are the analytical registration values at the eight corners of the
+  // [0, 1]^3 interpolation cell.
+  const double f000 = -radius;
+  const double f100 = 1.0 - radius;
+  const double f010 = f100;
+  const double f001 = f100;
+  const double f110 = std::sqrt(2.0) - radius;
+  const double f101 = f110;
+  const double f011 = f110;
+  const double f111 = std::sqrt(3.0) - radius;
+  constexpr double u = 0.25;
+  constexpr double v = 0.5;
+  constexpr double w = 0.75;
+  const double expected_value =
+      (1 - u) * (1 - v) * (1 - w) * f000 + u * (1 - v) * (1 - w) * f100 +
+      (1 - u) * v * (1 - w) * f010 + u * v * (1 - w) * f110 +
+      (1 - u) * (1 - v) * w * f001 + u * (1 - v) * w * f101 +
+      (1 - u) * v * w * f011 + u * v * w * f111;
+  const Vector3d expected_gradient(
+      (1 - v) * (1 - w) * (f100 - f000) + v * (1 - w) * (f110 - f010) +
+          (1 - v) * w * (f101 - f001) + v * w * (f111 - f011),
+      (1 - u) * (1 - w) * (f010 - f000) + u * (1 - w) * (f110 - f100) +
+          (1 - u) * w * (f011 - f001) + u * w * (f111 - f101),
+      (1 - u) * (1 - v) * (f001 - f000) + u * (1 - v) * (f101 - f100) +
+          (1 - u) * v * (f011 - f010) + u * v * (f111 - f110));
+  EXPECT_NEAR(result->value, expected_value, 1e-14);
+  EXPECT_TRUE(CompareMatrices(result->gradient, expected_gradient, 1e-14));
+
+  // At an internal lattice plane, half-open ownership selects the interval
+  // beginning at the stored sample.
+  const Vector3<int> center_index(4, 4, 4);
+  const Vector3d center = sampled.stored_sample_center(
+      center_index[0], center_index[1], center_index[2]);
+  const auto at_center = sampled.InterpolateSdf(center);
+  ASSERT_TRUE(at_center.has_value());
+  EXPECT_EQ(at_center->value, sampled.stored_sample(4, 4, 4).value);
+  EXPECT_NEAR(at_center->gradient.x(),
+              sampled.stored_sample(5, 4, 4).value -
+                  sampled.stored_sample(4, 4, 4).value,
+              1e-14);
+
+  const Vector3<int> last = sampled.storage_counts() - Vector3<int>::Ones();
+  const Vector3d final_center =
+      sampled.stored_sample_center(last[0], last[1], last[2]);
+  const auto at_final = sampled.InterpolateSdf(final_center);
+  ASSERT_TRUE(at_final.has_value());
+  EXPECT_EQ(at_final->value,
+            sampled.stored_sample(last[0], last[1], last[2]).value);
+  EXPECT_FALSE(sampled.InterpolateSdf(final_center + Vector3d(1e-12, 0.0, 0.0))
+                   .has_value());
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, SymmetricInterpolationHasZeroGradient) {
+  const VoxelSdfGeometry sampled(Sphere(2.0), 1.0, 10.0,
+                                 VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto result = sampled.InterpolateSdf(Vector3d::Zero());
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(std::isfinite(result->value));
+  EXPECT_TRUE(result->gradient.allFinite());
+  EXPECT_EQ(result->gradient, Vector3d::Zero());
+}
+
 GTEST_TEST(VoxelSdfGeometryTest, CachedSamplesMatchPointDistance) {
   const Box box(5.0, 5.0, 5.0);
   const VoxelSdfGeometry dut(box, 1.0, 1e7);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "drake/common/drake_copyable.h"
@@ -55,6 +56,11 @@ class VoxelSdfGeometry {
   const SdfSample& sample(int i, int j, int k) const;
   Vector3<double> stored_sample_center(int i, int j, int k) const;
   const SdfSample& stored_sample(int i, int j, int k) const;
+
+  /* Interpolates the stored scalar field and returns the derivative of that
+   same interpolant. Returns no value outside the stored sample-center domain.
+   This is only available for kSampledTrilinear geometry. */
+  std::optional<SdfSample> InterpolateSdf(const Vector3<double>& p_GQ) const;
 
   SdfSample EvaluateSdf(const Vector3<double>& p_GQ) const;
   std::vector<SdfBranch> CalcCellSdfBranches(int i, int j, int k) const;

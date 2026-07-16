@@ -1,6 +1,7 @@
 #include "drake/geometry/proximity/voxel_sdf_geometry.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <new>
@@ -234,6 +235,77 @@ Vector3<double> VoxelSdfGeometry::stored_sample_center(int i, int j,
 const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::stored_sample(
     int i, int j, int k) const {
   return samples_[storage_linear_index(i, j, k)];
+}
+
+std::optional<VoxelSdfGeometry::SdfSample> VoxelSdfGeometry::InterpolateSdf(
+    const Vector3<double>& p_GQ) const {
+  DRAKE_DEMAND(evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear);
+  DRAKE_DEMAND(p_GQ.allFinite());
+
+  struct AxisInterval {
+    int lower{};
+    double coordinate{};
+  };
+  std::array<AxisInterval, 3> intervals;
+  const Vector3<double> first = stored_sample_center(0, 0, 0);
+  const Vector3<double> last = stored_sample_center(
+      storage_counts_[0] - 1, storage_counts_[1] - 1, storage_counts_[2] - 1);
+  for (int a = 0; a < 3; ++a) {
+    if (p_GQ[a] < first[a] || p_GQ[a] > last[a]) return std::nullopt;
+    // Interpolation cells are half open: a query on an internal sample plane
+    // belongs to the interval beginning at that sample. The final outer plane
+    // is included by assigning it to the last interval at coordinate one.
+    if (p_GQ[a] == last[a]) {
+      intervals[a] = AxisInterval{storage_counts_[a] - 2, 1.0};
+    } else {
+      const double lattice_coordinate = (p_GQ[a] - first[a]) / voxel_width_;
+      const int lower = static_cast<int>(std::floor(lattice_coordinate));
+      if (lower < 0 || lower >= storage_counts_[a] - 1) return std::nullopt;
+      intervals[a] =
+          AxisInterval{lower, lattice_coordinate - static_cast<double>(lower)};
+    }
+  }
+
+  const int i = intervals[0].lower;
+  const int j = intervals[1].lower;
+  const int k = intervals[2].lower;
+  const double u = intervals[0].coordinate;
+  const double v = intervals[1].coordinate;
+  const double w = intervals[2].coordinate;
+  const double one_u = 1.0 - u;
+  const double one_v = 1.0 - v;
+  const double one_w = 1.0 - w;
+  const auto value = [this, i, j, k](int di, int dj, int dk) {
+    return stored_sample(i + di, j + dj, k + dk).value;
+  };
+  const double f000 = value(0, 0, 0);
+  const double f100 = value(1, 0, 0);
+  const double f010 = value(0, 1, 0);
+  const double f110 = value(1, 1, 0);
+  const double f001 = value(0, 0, 1);
+  const double f101 = value(1, 0, 1);
+  const double f011 = value(0, 1, 1);
+  const double f111 = value(1, 1, 1);
+
+  // The scalar grid is the source of truth for off-grid evaluation. Its
+  // gradient is the derivative of this same trilinear scalar field so pressure
+  // values and gradients remain mutually consistent; stored gradients are not
+  // blended. Trilinear gradients can jump across lattice cells or vanish at a
+  // symmetric point, and neither condition warrants normalization or a
+  // replacement value.
+  const double interpolated_value =
+      one_u * one_v * one_w * f000 + u * one_v * one_w * f100 +
+      one_u * v * one_w * f010 + u * v * one_w * f110 +
+      one_u * one_v * w * f001 + u * one_v * w * f101 + one_u * v * w * f011 +
+      u * v * w * f111;
+  const Vector3<double> parametric_gradient(
+      one_v * one_w * (f100 - f000) + v * one_w * (f110 - f010) +
+          one_v * w * (f101 - f001) + v * w * (f111 - f011),
+      one_u * one_w * (f010 - f000) + u * one_w * (f110 - f100) +
+          one_u * w * (f011 - f001) + u * w * (f111 - f101),
+      one_u * one_v * (f001 - f000) + u * one_v * (f101 - f100) +
+          one_u * v * (f011 - f010) + u * v * (f111 - f110));
+  return SdfSample{interpolated_value, parametric_gradient / voxel_width_};
 }
 
 VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
