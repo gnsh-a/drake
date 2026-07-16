@@ -131,6 +131,19 @@ GTEST_TEST(VoxelSdfGeometryTest, SphereGridAndCachedSamples) {
   EXPECT_EQ(one_cell.sample(0, 0, 0).value, -0.25);
 }
 
+GTEST_TEST(VoxelSdfGeometryTest, AffineBranchAccess) {
+  const VoxelSdfGeometry sphere(Sphere(2.5), 1.0, 10.0);
+  const auto sphere_branches = sphere.CalcCellSdfBranches(2, 2, 2);
+  ASSERT_EQ(sphere_branches.size(), 1u);
+  EXPECT_EQ(sphere_branches[0].sample.value, sphere.sample(2, 2, 2).value);
+  EXPECT_EQ(sphere_branches[0].sample.gradient,
+            sphere.sample(2, 2, 2).gradient);
+
+  const VoxelSdfGeometry box(Box(2.0, 4.0, 6.0), 1.0, 10.0);
+  EXPECT_EQ(box.CalcCellSdfBranches(1, 2, 3).size(), 6u);
+  EXPECT_EQ(box.EvaluateSdfBranches(Vector3d(0.25, 0.5, 0.75)).size(), 6u);
+}
+
 GTEST_TEST(VoxelSdfGeometryTest, CopyAndMoveOwnership) {
   const VoxelSdfGeometry original(Box(2.0, 3.0, 4.0), 1.0, 12.0);
 

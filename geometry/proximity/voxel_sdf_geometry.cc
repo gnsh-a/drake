@@ -162,6 +162,16 @@ VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
   return shape_.Evaluate(p_GQ);
 }
 
+std::vector<VoxelSdfGeometry::SdfBranch>
+VoxelSdfGeometry::CalcCellSdfBranches(int i, int j, int k) const {
+  return shape_.CalcAffineBranches(cell_center(i, j, k), sample(i, j, k));
+}
+
+std::vector<VoxelSdfGeometry::SdfBranch>
+VoxelSdfGeometry::EvaluateSdfBranches(const Vector3<double>& p_GQ) const {
+  return shape_.CalcAffineBranches(p_GQ);
+}
+
 size_t VoxelSdfGeometry::linear_index(int i, int j, int k) const {
   DRAKE_DEMAND(i >= 0 && i < cell_counts_[0]);
   DRAKE_DEMAND(j >= 0 && j < cell_counts_[1]);

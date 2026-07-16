@@ -1,7 +1,10 @@
 #include "drake/geometry/proximity/voxel_sdf_shape.h"
 
+#include <algorithm>
+#include <limits>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <fcl/fcl.h>
 #include <gtest/gtest.h>
@@ -69,6 +72,55 @@ GTEST_TEST(VoxelSdfShapeTest, SphereEvaluationAndGeometryData) {
   const auto center = dut.Evaluate(Vector3d::Zero());
   EXPECT_EQ(center.value, -sphere.radius());
   EXPECT_EQ(center.gradient, Vector3d::UnitX());
+}
+
+GTEST_TEST(VoxelSdfShapeTest, BoxAffineBranches) {
+  const VoxelSdfShape dut(Box(2.0, 4.0, 6.0));
+  const Vector3d p_GQ(0.75, 0.25, -0.5);
+  const auto branches = dut.CalcAffineBranches(p_GQ);
+  ASSERT_EQ(branches.size(), 6u);
+
+  std::vector<int> active;
+  double max_value = -std::numeric_limits<double>::infinity();
+  for (const auto& branch : branches) {
+    EXPECT_EQ(branch.active_region.size(), 5u);
+    max_value = std::max(max_value, branch.sample.value);
+    const bool is_active = std::all_of(
+        branch.active_region.begin(), branch.active_region.end(),
+        [&p_GQ](const auto& half_space) {
+          return half_space.Evaluate(p_GQ) <= 0.0;
+        });
+    if (is_active) active.push_back(branch.index);
+  }
+  EXPECT_EQ(active, std::vector<int>({0}));
+  EXPECT_EQ(max_value, dut.Evaluate(p_GQ).value);
+
+  // At equal distance from +x and +y, both closed active regions contain the
+  // query point. Stable branch indices let the contact kernel own this tie
+  // without perturbing either region.
+  const Vector3d p_GC(0.5, 1.5, 0.0);
+  active.clear();
+  for (const auto& branch : dut.CalcAffineBranches(p_GC)) {
+    const bool is_active = std::all_of(
+        branch.active_region.begin(), branch.active_region.end(),
+        [&p_GC](const auto& half_space) {
+          return half_space.Evaluate(p_GC) <= 0.0;
+        });
+    if (is_active) active.push_back(branch.index);
+  }
+  EXPECT_EQ(active, std::vector<int>({0, 2}));
+}
+
+GTEST_TEST(VoxelSdfShapeTest, SphereHasOneAffineBranch) {
+  const VoxelSdfShape dut(Sphere(2.5));
+  const Vector3d p_GQ(1.0, 0.5, -0.25);
+  const auto branches = dut.CalcAffineBranches(p_GQ);
+  ASSERT_EQ(branches.size(), 1u);
+  EXPECT_TRUE(branches[0].active_region.empty());
+  EXPECT_EQ(branches[0].index, 0);
+  EXPECT_EQ(branches[0].sample.value, dut.Evaluate(p_GQ).value);
+  EXPECT_TRUE(CompareMatrices(branches[0].sample.gradient,
+                              dut.Evaluate(p_GQ).gradient));
 }
 
 GTEST_TEST(VoxelSdfShapeTest, CopyAndMovePreserveValue) {

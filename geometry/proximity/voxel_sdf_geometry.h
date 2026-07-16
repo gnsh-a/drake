@@ -17,6 +17,7 @@ namespace hydroelastic {
 class VoxelSdfGeometry {
  public:
   using SdfSample = VoxelSdfShape::Sample;
+  using SdfBranch = VoxelSdfShape::AffineBranch;
 
   VoxelSdfGeometry(const Box& box, double voxel_width,
                    double hydroelastic_modulus);
@@ -39,6 +40,9 @@ class VoxelSdfGeometry {
   Vector3<double> cell_center(int i, int j, int k) const;
   const SdfSample& sample(int i, int j, int k) const;
   SdfSample EvaluateSdf(const Vector3<double>& p_GQ) const;
+  std::vector<SdfBranch> CalcCellSdfBranches(int i, int j, int k) const;
+  std::vector<SdfBranch> EvaluateSdfBranches(
+      const Vector3<double>& p_GQ) const;
 
  private:
   size_t linear_index(int i, int j, int k) const;
