@@ -84,12 +84,13 @@ GTEST_TEST(VoxelSdfShapeTest, BoxAffineBranches) {
   double max_value = -std::numeric_limits<double>::infinity();
   for (const auto& branch : branches) {
     EXPECT_EQ(branch.active_region.size(), 5u);
+    EXPECT_TRUE(branch.is_cell_invariant);
     max_value = std::max(max_value, branch.sample.value);
-    const bool is_active = std::all_of(
-        branch.active_region.begin(), branch.active_region.end(),
-        [&p_GQ](const auto& half_space) {
-          return half_space.Evaluate(p_GQ) <= 0.0;
-        });
+    const bool is_active =
+        std::all_of(branch.active_region.begin(), branch.active_region.end(),
+                    [&p_GQ](const auto& half_space) {
+                      return half_space.Evaluate(p_GQ) <= 0.0;
+                    });
     if (is_active) active.push_back(branch.index);
   }
   EXPECT_EQ(active, std::vector<int>({0}));
@@ -101,11 +102,11 @@ GTEST_TEST(VoxelSdfShapeTest, BoxAffineBranches) {
   const Vector3d p_GC(0.5, 1.5, 0.0);
   active.clear();
   for (const auto& branch : dut.CalcAffineBranches(p_GC)) {
-    const bool is_active = std::all_of(
-        branch.active_region.begin(), branch.active_region.end(),
-        [&p_GC](const auto& half_space) {
-          return half_space.Evaluate(p_GC) <= 0.0;
-        });
+    const bool is_active =
+        std::all_of(branch.active_region.begin(), branch.active_region.end(),
+                    [&p_GC](const auto& half_space) {
+                      return half_space.Evaluate(p_GC) <= 0.0;
+                    });
     if (is_active) active.push_back(branch.index);
   }
   EXPECT_EQ(active, std::vector<int>({0, 2}));
@@ -118,6 +119,7 @@ GTEST_TEST(VoxelSdfShapeTest, SphereHasOneAffineBranch) {
   ASSERT_EQ(branches.size(), 1u);
   EXPECT_TRUE(branches[0].active_region.empty());
   EXPECT_EQ(branches[0].index, 0);
+  EXPECT_FALSE(branches[0].is_cell_invariant);
   EXPECT_EQ(branches[0].sample.value, dut.Evaluate(p_GQ).value);
   EXPECT_TRUE(CompareMatrices(branches[0].sample.gradient,
                               dut.Evaluate(p_GQ).gradient));

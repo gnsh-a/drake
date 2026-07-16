@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <span>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -24,6 +25,9 @@ using Eigen::Vector3d;
 
 constexpr double kToleranceScale = 64.0;
 constexpr double kMinimumPolygonArea = 1e-14;
+
+using AffineHalfSpace = VoxelSdfShape::AffineHalfSpace;
+using SdfBranch = VoxelSdfGeometry::SdfBranch;
 
 bool IsFinite(const AffineSdfField& field) {
   return std::isfinite(field.value) && field.gradient.allFinite() &&
@@ -99,11 +103,139 @@ void SortCounterClockwise(const Vector3d& normal,
   }
 }
 
-}  // namespace
+double CalcSpatialTolerance(double voxel_width, double characteristic_length_A,
+                            double characteristic_length_B) {
+  return kToleranceScale * std::numeric_limits<double>::epsilon() *
+         std::max(
+             {voxel_width, characteristic_length_A, characteristic_length_B});
+}
 
-std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
+bool ActiveRegionMayIntersectVoxel(
+    std::span<const AffineHalfSpace> active_region_A, const Vector3d& center_A,
+    double voxel_radius, double spatial_tolerance) {
+  for (const AffineHalfSpace& half_space_A : active_region_A) {
+    DRAKE_DEMAND(half_space_A.normal.allFinite());
+    DRAKE_DEMAND(std::isfinite(half_space_A.offset));
+    const double normal_norm = half_space_A.normal.norm();
+    DRAKE_DEMAND(normal_norm > 0.0 && std::isfinite(normal_norm));
+    // The exact minimum of n⋅p + d over an axis-aligned cube is its value at
+    // the center minus r‖n‖₁. If even that minimum is positive, no point in the
+    // voxel can belong to this branch. The tolerance makes this rejection
+    // conservative at a shared branch boundary.
+    const double minimum = half_space_A.Evaluate(center_A) -
+                           voxel_radius * half_space_A.normal.cwiseAbs().sum();
+    if (minimum > spatial_tolerance * normal_norm) return false;
+  }
+  return true;
+}
+
+AffineHalfSpace ReExpressHalfSpaceInA(const AffineHalfSpace& half_space_B,
+                                      const math::RigidTransformd& X_AB,
+                                      const math::RigidTransformd& X_BA) {
+  // Substituting p_BQ = R_BA p_AQ + p_BAo into
+  // n_B⋅p_BQ + d <= 0 gives (R_AB n_B)⋅p_AQ + n_B⋅p_BAo + d <= 0.
+  return AffineHalfSpace{
+      X_AB.rotation() * half_space_B.normal,
+      half_space_B.normal.dot(X_BA.translation()) + half_space_B.offset};
+}
+
+SdfBranch ReExpressBranchInA(const SdfBranch& branch_B,
+                             const math::RigidTransformd& X_AB,
+                             const math::RigidTransformd& X_BA) {
+  SdfBranch branch_A = branch_B;
+  branch_A.sample.gradient = X_AB.rotation() * branch_B.sample.gradient;
+  for (int i = 0; i < static_cast<int>(branch_B.active_region.size()); ++i) {
+    branch_A.active_region[i] =
+        ReExpressHalfSpaceInA(branch_B.active_region[i], X_AB, X_BA);
+  }
+  return branch_A;
+}
+
+std::vector<SdfBranch> PruneBranchesForVoxel(std::vector<SdfBranch> branches_A,
+                                             const Vector3d& center_A,
+                                             double voxel_radius,
+                                             double spatial_tolerance) {
+  std::vector<SdfBranch> result;
+  result.reserve(branches_A.size());
+  for (SdfBranch& branch_A : branches_A) {
+    if (ActiveRegionMayIntersectVoxel(branch_A.active_region, center_A,
+                                      voxel_radius, spatial_tolerance)) {
+      result.push_back(std::move(branch_A));
+    }
+  }
+  return result;
+}
+
+void ClipPolygonToActiveRegion(std::span<const AffineHalfSpace> active_region_A,
+                               double spatial_tolerance,
+                               std::vector<Vector3d>* vertices_A) {
+  DRAKE_DEMAND(vertices_A != nullptr);
+  std::vector<Vector3d> scratch_A;
+  for (const AffineHalfSpace& half_space_A : active_region_A) {
+    if (vertices_A->size() < 3) return;
+    const double squared_norm = half_space_A.normal.squaredNorm();
+    DRAKE_DEMAND(squared_norm > 0.0 && std::isfinite(squared_norm));
+    // Clip to n⋅p + d <= tolerance. The small outward shift keeps adjacent
+    // closed branch regions from opening a floating-point crack.
+    const Vector3d boundary_point_A =
+        (spatial_tolerance * std::sqrt(squared_norm) - half_space_A.offset) *
+        half_space_A.normal / squared_norm;
+    const PosedHalfSpace<double> posed_half_space_A(
+        half_space_A.normal / std::sqrt(squared_norm), boundary_point_A,
+        /*already_normalized=*/true);
+    ClipPolygonByHalfSpace(*vertices_A, posed_half_space_A, &scratch_A);
+    vertices_A->swap(scratch_A);
+    scratch_A.clear();
+    RemoveNearDuplicates(spatial_tolerance, vertices_A);
+  }
+}
+
+bool IsCanonicalBranchAtPoint(std::span<const SdfBranch> branches_A,
+                              const SdfBranch& selected_A,
+                              const Vector3d& center_A, const Vector3d& p_AQ,
+                              double spatial_tolerance) {
+  const double selected_value =
+      selected_A.sample.value + selected_A.sample.gradient.dot(p_AQ - center_A);
+  for (const SdfBranch& candidate_A : branches_A) {
+    if (candidate_A.index >= selected_A.index) continue;
+    const double candidate_value =
+        candidate_A.sample.value +
+        candidate_A.sample.gradient.dot(p_AQ - center_A);
+    if (std::abs(candidate_value - selected_value) <= spatial_tolerance) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CellOwnsBoundaryPolygon(const VoxelSdfGeometry& A, int i, int j, int k,
+                             const Vector3d& center_A,
+                             std::span<const Vector3d> vertices_A,
+                             double spatial_tolerance) {
+  const std::array<int, 3> cell_index{i, j, k};
+  const double voxel_radius = 0.5 * A.voxel_width();
+  for (int axis = 0; axis < 3; ++axis) {
+    if (cell_index[axis] == 0) continue;
+    const double lower_boundary = center_A[axis] - voxel_radius;
+    const bool lies_on_lower_boundary = std::all_of(
+        vertices_A.begin(), vertices_A.end(),
+        [axis, lower_boundary, spatial_tolerance](const Vector3d& vertex_A) {
+          return std::abs(vertex_A[axis] - lower_boundary) <= spatial_tolerance;
+        });
+    // A polygon on a shared cell boundary is constructed by both adjacent
+    // voxels. Assign it to the lower-index voxel, whose corresponding boundary
+    // is its upper face. Repeating this rule per axis also gives unique
+    // ownership to polygons on grid edges and vertices.
+    if (lies_on_lower_boundary) return false;
+  }
+  return true;
+}
+
+std::optional<VoxelSdfContactPolygon> DoCalcVoxelSdfContactPolygon(
     const Vector3d& center_A, double voxel_width, const AffineSdfField& sdf_A,
-    const AffineSdfField& sdf_B_A) {
+    const AffineSdfField& sdf_B_A,
+    std::span<const AffineHalfSpace> active_region_A,
+    std::span<const AffineHalfSpace> active_region_B_A) {
   DRAKE_DEMAND(center_A.allFinite());
   DRAKE_DEMAND(std::isfinite(voxel_width) && voxel_width > 0.0);
   DRAKE_DEMAND(IsFinite(sdf_A));
@@ -130,11 +262,22 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
   if (grad_F_norm <= gradient_tolerance) return std::nullopt;
 
   const double F_center = p_A0 - p_B0;
+  const double radius = 0.5 * voxel_width;
+  const double pressure_tolerance =
+      kToleranceScale * std::numeric_limits<double>::epsilon() *
+      std::max({std::abs(p_A0), std::abs(p_B0), radius * grad_p_A.norm(),
+                radius * grad_p_B_A.norm()});
+  // This is the exact range of the affine equal-pressure field over the cube.
+  // Rejecting a branch pair here is equivalent to the later plane-cube test;
+  // it does not skip evaluation of the voxel or any other branch pair.
+  const double maximum_variation = radius * grad_F.cwiseAbs().sum();
+  if (std::abs(F_center) > maximum_variation + pressure_tolerance) {
+    return std::nullopt;
+  }
   const Vector3d plane_point =
       center_A - F_center * grad_F / grad_F.squaredNorm();
   const Vector3d nhat_BA_A = grad_F / grad_F_norm;
 
-  const double radius = 0.5 * voxel_width;
   const std::array<Vector3d, 8> corners_A{{
       center_A + Vector3d(-radius, -radius, -radius),
       center_A + Vector3d(radius, -radius, -radius),
@@ -160,10 +303,8 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
       {{3, 7}},
   }};
 
-  const double spatial_tolerance =
-      kToleranceScale * std::numeric_limits<double>::epsilon() *
-      std::max({voxel_width, sdf_A.characteristic_length,
-                sdf_B_A.characteristic_length});
+  const double spatial_tolerance = CalcSpatialTolerance(
+      voxel_width, sdf_A.characteristic_length, sdf_B_A.characteristic_length);
   std::array<double, 8> distances{};
   for (int i = 0; i < static_cast<int>(corners_A.size()); ++i) {
     distances[i] = nhat_BA_A.dot(corners_A[i] - plane_point);
@@ -208,6 +349,16 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
                            &clipped_vertices_A);
   }
 
+  ClipPolygonToActiveRegion(active_region_A, spatial_tolerance,
+                            &clipped_vertices_A);
+  ClipPolygonToActiveRegion(active_region_B_A, spatial_tolerance,
+                            &clipped_vertices_A);
+  // A Box's face-affine maximum equals its Euclidean SDF only inside the Box.
+  // This construction remains exact there: active-region clipping makes the
+  // selected face value the maximum, and equal nonnegative pressures make that
+  // maximum nonpositive for both geometries. Therefore every retained Box
+  // point is inside or on its boundary; no exterior edge or corner formula is
+  // being approximated by these branches.
   RemoveNearDuplicates(spatial_tolerance, &clipped_vertices_A);
   if (clipped_vertices_A.size() < 3) return std::nullopt;
   double signed_area = CalcSignedArea(clipped_vertices_A, nhat_BA_A);
@@ -230,6 +381,15 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
                                 grad_p_B_A};
 }
 
+}  // namespace
+
+std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
+    const Vector3d& center_A, double voxel_width, const AffineSdfField& sdf_A,
+    const AffineSdfField& sdf_B_A) {
+  return DoCalcVoxelSdfContactPolygon(center_A, voxel_width, sdf_A, sdf_B_A, {},
+                                      {});
+}
+
 std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
@@ -247,39 +407,79 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
     for (int j = 0; j < A.cell_counts()[1]; ++j) {
       for (int i = 0; i < A.cell_counts()[0]; ++i) {
         const Vector3d center_A = A.cell_center(i, j, k);
-        const VoxelSdfGeometry::SdfSample& sample_A = A.sample(i, j, k);
-
         const Vector3d center_B = X_BA * center_A;
-        const VoxelSdfGeometry::SdfSample sample_B = B.EvaluateSdf(center_B);
+        const double voxel_radius = 0.5 * A.voxel_width();
+        const double spatial_tolerance =
+            CalcSpatialTolerance(A.voxel_width(), A.characteristic_length(),
+                                 B.characteristic_length());
 
-        const AffineSdfField sdf_A{sample_A.value, sample_A.gradient,
-                                   A.pressure_scale(),
-                                   A.characteristic_length()};
-        const AffineSdfField sdf_B_A{
-            sample_B.value, X_AB.rotation() * sample_B.gradient,
-            B.pressure_scale(), B.characteristic_length()};
-        std::optional<VoxelSdfContactPolygon> polygon =
-            CalcVoxelSdfContactPolygon(center_A, A.voxel_width(), sdf_A,
-                                       sdf_B_A);
-        if (!polygon.has_value()) continue;
-
-        DRAKE_DEMAND(polygon->vertices_A.size() == polygon->pressures.size());
-        std::vector<int> vertex_indices;
-        vertex_indices.reserve(polygon->vertices_A.size());
-        for (int v = 0; v < static_cast<int>(polygon->vertices_A.size()); ++v) {
-          vertex_indices.push_back(builder_A.AddVertex(polygon->vertices_A[v],
-                                                       polygon->pressures[v]));
+        // Every A voxel is visited. Pruning below only removes an affine shape
+        // branch whose active region provably cannot intersect this voxel.
+        const std::vector<SdfBranch> branches_A =
+            PruneBranchesForVoxel(A.CalcCellSdfBranches(i, j, k), center_A,
+                                  voxel_radius, spatial_tolerance);
+        std::vector<SdfBranch> branches_B_A;
+        for (const SdfBranch& branch_B : B.EvaluateSdfBranches(center_B)) {
+          branches_B_A.push_back(ReExpressBranchInA(branch_B, X_AB, X_BA));
         }
-        // The contact field convention stores geometry M's pressure gradient.
-        // M is the lower-id geometry even when the higher-id A supplies the
-        // finer traversal grid.
-        const Vector3d& grad_p_M_A =
-            id_A < id_B ? polygon->grad_p_A : polygon->grad_p_B_A;
-        const int faces_added = builder_A.AddPolygon(
-            vertex_indices, polygon->nhat_BA_A, grad_p_M_A);
-        DRAKE_DEMAND(faces_added == 1);
-        grad_p_A_A_per_face.push_back(polygon->grad_p_A);
-        grad_p_B_A_per_face.push_back(polygon->grad_p_B_A);
+        branches_B_A = PruneBranchesForVoxel(std::move(branches_B_A), center_A,
+                                             voxel_radius, spatial_tolerance);
+
+        for (const SdfBranch& branch_A : branches_A) {
+          const AffineSdfField sdf_A{
+              branch_A.sample.value, branch_A.sample.gradient,
+              A.pressure_scale(), A.characteristic_length()};
+          for (const SdfBranch& branch_B_A : branches_B_A) {
+            const AffineSdfField sdf_B_A{
+                branch_B_A.sample.value, branch_B_A.sample.gradient,
+                B.pressure_scale(), B.characteristic_length()};
+            std::optional<VoxelSdfContactPolygon> polygon =
+                DoCalcVoxelSdfContactPolygon(center_A, A.voxel_width(), sdf_A,
+                                             sdf_B_A, branch_A.active_region,
+                                             branch_B_A.active_region);
+            if (!polygon.has_value()) continue;
+
+            // Closed active regions overlap on their boundaries. A contact
+            // polygon normally crosses such a boundary and has its centroid
+            // strictly within one region. If the entire polygon lies on a tie,
+            // only the lowest stable branch index owns it.
+            const Vector3d centroid_A = CalcCentroid(polygon->vertices_A);
+            if (!IsCanonicalBranchAtPoint(branches_A, branch_A, center_A,
+                                          centroid_A, spatial_tolerance) ||
+                !IsCanonicalBranchAtPoint(branches_B_A, branch_B_A, center_A,
+                                          centroid_A, spatial_tolerance)) {
+              continue;
+            }
+            const bool has_cell_invariant_fields =
+                branch_A.is_cell_invariant && branch_B_A.is_cell_invariant;
+            if (has_cell_invariant_fields &&
+                !CellOwnsBoundaryPolygon(A, i, j, k, center_A,
+                                         polygon->vertices_A,
+                                         spatial_tolerance)) {
+              continue;
+            }
+
+            DRAKE_DEMAND(polygon->vertices_A.size() ==
+                         polygon->pressures.size());
+            std::vector<int> vertex_indices;
+            vertex_indices.reserve(polygon->vertices_A.size());
+            for (int v = 0; v < static_cast<int>(polygon->vertices_A.size());
+                 ++v) {
+              vertex_indices.push_back(builder_A.AddVertex(
+                  polygon->vertices_A[v], polygon->pressures[v]));
+            }
+            // The contact field convention stores geometry M's pressure
+            // gradient. M is the lower-id geometry even when the higher-id A
+            // supplies the finer traversal grid.
+            const Vector3d& grad_p_M_A =
+                id_A < id_B ? polygon->grad_p_A : polygon->grad_p_B_A;
+            const int faces_added = builder_A.AddPolygon(
+                vertex_indices, polygon->nhat_BA_A, grad_p_M_A);
+            DRAKE_DEMAND(faces_added == 1);
+            grad_p_A_A_per_face.push_back(polygon->grad_p_A);
+            grad_p_B_A_per_face.push_back(polygon->grad_p_B_A);
+          }
+        }
       }
     }
   }

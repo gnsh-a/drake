@@ -144,8 +144,15 @@ void ExpectSurfaceInvariants(const ContactSurface<double>& surface,
     EXPECT_TRUE(std::isfinite(centroid_pressure));
     EXPECT_GE(centroid_pressure, -1e-12);
     const int first_vertex = face.vertex(0);
-    EXPECT_NEAR(field_W.EvaluateCartesian(f, mesh_W.vertex(first_vertex)),
-                field_W.EvaluateAtVertex(first_vertex), 1e-12);
+    const double cartesian_pressure =
+        field_W.EvaluateCartesian(f, mesh_W.vertex(first_vertex));
+    const double vertex_pressure = field_W.EvaluateAtVertex(first_vertex);
+    // Re-evaluating a high-modulus affine field can lose a few nanounits to
+    // cancellation at a zero-pressure vertex.
+    const double pressure_tolerance =
+        1e-8 + 1e-14 * std::max(std::abs(cartesian_pressure),
+                                std::abs(vertex_pressure));
+    EXPECT_NEAR(cartesian_pressure, vertex_pressure, pressure_tolerance);
 
     const Vector3d& grad_p_A_W = surface.EvaluateGradE_M_W(f);
     const Vector3d& grad_p_B_W = surface.EvaluateGradE_N_W(f);
@@ -156,6 +163,41 @@ void ExpectSurfaceInvariants(const ContactSurface<double>& surface,
     // The face normal must follow increasing A pressure and decreasing B
     // pressure, i.e., point out of B and into A.
     EXPECT_GT(surface.face_normal(f).dot(grad_p_A_W - grad_p_B_W), 0.0);
+  }
+}
+
+void ExpectNoCoincidentFaces(const ContactSurface<double>& surface) {
+  const PolygonSurfaceMesh<double>& mesh_W = surface.poly_mesh_W();
+  constexpr double tolerance = 1e-12;
+  for (int f = 0; f < mesh_W.num_faces(); ++f) {
+    const SurfacePolygon face_f = mesh_W.element(f);
+    for (int g = f + 1; g < mesh_W.num_faces(); ++g) {
+      if ((surface.centroid(f) - surface.centroid(g)).norm() > tolerance) {
+        continue;
+      }
+      const SurfacePolygon face_g = mesh_W.element(g);
+      if (face_f.num_vertices() != face_g.num_vertices()) continue;
+      std::vector<bool> matched_g(face_g.num_vertices(), false);
+      bool coincident = true;
+      for (int v_f = 0; v_f < face_f.num_vertices(); ++v_f) {
+        bool matched = false;
+        for (int v_g = 0; v_g < face_g.num_vertices(); ++v_g) {
+          if (matched_g[v_g]) continue;
+          if ((mesh_W.vertex(face_f.vertex(v_f)) -
+               mesh_W.vertex(face_g.vertex(v_g)))
+                  .norm() <= tolerance) {
+            matched_g[v_g] = true;
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) {
+          coincident = false;
+          break;
+        }
+      }
+      EXPECT_FALSE(coincident) << "faces " << f << " and " << g;
+    }
   }
 }
 
@@ -473,6 +515,39 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, MixedSphereBoxContact) {
       fine_box, X_WB, id_box, coarse_sphere, X_WS, id_sphere);
   ASSERT_NE(box_grid_surface, nullptr);
   ExpectSurfaceInvariants(*box_grid_surface, id_sphere, id_box);
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, SphereBoxFaceBranchesCloseGaps) {
+  const VoxelSdfGeometry sphere(Sphere(1.0), 0.05, 1.0e8);
+  const VoxelSdfGeometry box(Box::MakeCube(2.0), 0.05, 1.0e8);
+  const auto [id_sphere, id_box] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WB(Vector3d(1.5, 0.15, 0.1));
+
+  const auto surface = CalcVoxelSdfCompliantContact(
+      sphere, RigidTransformd(), id_sphere, box, X_WB, id_box);
+  ASSERT_NE(surface, nullptr);
+  ExpectSurfaceInvariants(*surface, id_sphere, id_box);
+  // This is the frozen Sphere-Box case that exposed four strips of holes. The
+  // former single nearest-face gradient produced 1370 faces; exact Box face
+  // branches recover all missing cells, including eight cells split across a
+  // branch boundary.
+  EXPECT_EQ(surface->num_faces(), 1400);
+  ExpectNoCoincidentFaces(*surface);
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, SharedVoxelBoundaryHasSingleOwner) {
+  const VoxelSdfGeometry A(Box::MakeCube(2.0), 0.5, 100.0);
+  const VoxelSdfGeometry B(Box::MakeCube(2.0), 0.5, 100.0);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  // The x component places the x-normal equal-pressure patch on x = 0.5, a
+  // shared A-grid boundary. The y and z offsets keep the complete contact
+  // surface nondegenerate.
+  const RigidTransformd X_WB(Vector3d(1.0, 0.25, 0.25));
+  const auto surface =
+      CalcVoxelSdfCompliantContact(A, RigidTransformd(), id_A, B, X_WB, id_B);
+  ASSERT_NE(surface, nullptr);
+  ExpectSurfaceInvariants(*surface, id_A, id_B);
+  ExpectNoCoincidentFaces(*surface);
 }
 
 GTEST_TEST(VoxelSdfContactSurfaceTest, FaceOverlapDepthsAndMultipleVoxels) {

@@ -29,8 +29,8 @@ VoxelSdfShape::Sample VoxelSdfShape::Evaluate(
       data_);
 }
 
-std::vector<VoxelSdfShape::AffineBranch>
-VoxelSdfShape::CalcAffineBranches(const Vector3<double>& p_GQ) const {
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::CalcAffineBranches(
+    const Vector3<double>& p_GQ) const {
   DRAKE_DEMAND(p_GQ.allFinite());
   return std::visit(
       [&p_GQ](const auto& data) {
@@ -39,8 +39,7 @@ VoxelSdfShape::CalcAffineBranches(const Vector3<double>& p_GQ) const {
       data_);
 }
 
-std::vector<VoxelSdfShape::AffineBranch>
-VoxelSdfShape::CalcAffineBranches(
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::CalcAffineBranches(
     const Vector3<double>& p_GQ,
     const VoxelSdfShape::Sample& single_branch_sample) const {
   DRAKE_DEMAND(p_GQ.allFinite());
@@ -91,9 +90,8 @@ VoxelSdfShape::Sample VoxelSdfShape::DoEvaluate(const BoxData& box,
   return Sample{gradient.dot(p_GQ - nearest), gradient};
 }
 
-std::vector<VoxelSdfShape::AffineBranch>
-VoxelSdfShape::DoCalcAffineBranches(const BoxData& box,
-                                    const Vector3<double>& p_GQ) {
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::DoCalcAffineBranches(
+    const BoxData& box, const Vector3<double>& p_GQ) {
   std::array<Sample, 6> samples;
   int index = 0;
   // This ordering matches DistanceToPoint::ExtremalAxis():
@@ -110,7 +108,7 @@ VoxelSdfShape::DoCalcAffineBranches(const BoxData& box,
   std::vector<AffineBranch> result;
   result.reserve(samples.size());
   for (int f = 0; f < static_cast<int>(samples.size()); ++f) {
-    AffineBranch branch{samples[f], {}, f};
+    AffineBranch branch{samples[f], {}, f, true};
     branch.active_region.reserve(samples.size() - 1);
     for (int g = 0; g < static_cast<int>(samples.size()); ++g) {
       if (g == f) continue;
@@ -126,8 +124,7 @@ VoxelSdfShape::DoCalcAffineBranches(const BoxData& box,
   return result;
 }
 
-std::vector<VoxelSdfShape::AffineBranch>
-VoxelSdfShape::DoCalcAffineBranches(
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::DoCalcAffineBranches(
     const BoxData& box, const Vector3<double>& p_GQ,
     const VoxelSdfShape::Sample&) {
   return DoCalcAffineBranches(box, p_GQ);
@@ -156,17 +153,15 @@ VoxelSdfShape::Sample VoxelSdfShape::DoEvaluate(const SphereData& sphere,
   return Sample{distance, gradient};
 }
 
-std::vector<VoxelSdfShape::AffineBranch>
-VoxelSdfShape::DoCalcAffineBranches(const SphereData& sphere,
-                                    const Vector3<double>& p_GQ) {
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::DoCalcAffineBranches(
+    const SphereData& sphere, const Vector3<double>& p_GQ) {
   return DoCalcAffineBranches(sphere, p_GQ, DoEvaluate(sphere, p_GQ));
 }
 
-std::vector<VoxelSdfShape::AffineBranch>
-VoxelSdfShape::DoCalcAffineBranches(
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::DoCalcAffineBranches(
     const SphereData&, const Vector3<double>&,
     const VoxelSdfShape::Sample& single_branch_sample) {
-  return {AffineBranch{single_branch_sample, {}, 0}};
+  return {AffineBranch{single_branch_sample, {}, 0, false}};
 }
 
 Vector3<double> VoxelSdfShape::DoCalcBoundingBoxHalfWidths(

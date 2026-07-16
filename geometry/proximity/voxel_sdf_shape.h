@@ -24,26 +24,30 @@ class VoxelSdfShape {
     Vector3<double> gradient{};
   };
 
-  /* An affine half space `normal_G.dot(p_GQ) + offset <= 0`. The normal need
-   not have unit length. All quantities are measured and expressed in the
-   shape's geometry frame G. */
+  /* An affine half space `normal.dot(p_FQ) + offset <= 0`. The normal need not
+   have unit length. The caller must express the normal and query point in the
+   same frame F. Branches returned by this class use the shape's geometry
+   frame. */
   struct AffineHalfSpace {
-    Vector3<double> normal_G{};
+    Vector3<double> normal{};
     double offset{};
 
-    double Evaluate(const Vector3<double>& p_GQ) const {
-      return normal_G.dot(p_GQ) + offset;
+    double Evaluate(const Vector3<double>& p_FQ) const {
+      return normal.dot(p_FQ) + offset;
     }
   };
 
   /* One affine piece of a shape's SDF at a query point. `active_region`
    contains the half spaces whose intersection is the region where this piece
    realizes the shape SDF. `index` gives the pieces a stable tie-breaking
-   order. */
+   order. `is_cell_invariant` is true when the same affine function applies in
+   every queried cell; its sample value can then change only by recentering that
+   function. */
   struct AffineBranch {
     Sample sample;
     std::vector<AffineHalfSpace> active_region;
     int index{};
+    bool is_cell_invariant{};
   };
 
   explicit VoxelSdfShape(const Box& box);
@@ -64,8 +68,7 @@ class VoxelSdfShape {
    cell sample. Piecewise-affine shapes construct all of their exact pieces and
    do not use the selected sample. */
   std::vector<AffineBranch> CalcAffineBranches(
-      const Vector3<double>& p_GQ,
-      const Sample& single_branch_sample) const;
+      const Vector3<double>& p_GQ, const Sample& single_branch_sample) const;
 
   Vector3<double> bounding_box_half_widths() const;
   double characteristic_length() const;

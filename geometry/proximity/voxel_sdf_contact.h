@@ -15,8 +15,8 @@ namespace geometry {
 namespace internal {
 namespace hydroelastic {
 
-/* A signed-distance field and its selected gradient at a voxel center. The
- quantities are expressed in the frame of the voxel. */
+/* One affine signed-distance field at a voxel center. The quantities are
+ expressed in the frame of the voxel. */
 struct AffineSdfField {
   double value{};
   Vector3<double> gradient{};
@@ -36,9 +36,9 @@ struct VoxelSdfContactPolygon {
 
 /* Calculates the contact polygon in one cubic voxel centered at `center_A`.
 
- Each selected center gradient defines a local affine extension over this
- voxel. A Box SDF is piecewise affine, while a Sphere SDF is curved and this
- extension is a local approximation. The returned normal points toward
+ Each selected branch defines an affine extension over this voxel. The Box
+ branches are exact within their active regions, while a Sphere branch is a
+ local approximation of its curved SDF. The returned normal points toward
  increasing A pressure and decreasing B pressure, i.e., out of B and into A.
  On the equal-pressure plane p_A = p_B, so clipping to nonnegative A pressure
  also clips to nonnegative B pressure.
