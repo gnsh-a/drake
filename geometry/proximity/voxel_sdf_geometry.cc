@@ -315,6 +315,11 @@ VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
 
 std::vector<VoxelSdfGeometry::SdfBranch> VoxelSdfGeometry::CalcCellSdfBranches(
     int i, int j, int k) const {
+  if (evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear) {
+    // TODO(gnsh-a): A sampled scalar SDF cannot recover the Box face branches
+    // discarded during sampling, so this mode uses one local affine branch.
+    return {SdfBranch{sample(i, j, k), {}, 0, false}};
+  }
   return shape_.CalcAffineBranches(cell_center(i, j, k), sample(i, j, k));
 }
 

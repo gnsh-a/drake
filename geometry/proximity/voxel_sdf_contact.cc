@@ -394,6 +394,9 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B) {
+  if (B.evaluation_mode() == VoxelSdfEvaluationMode::kSampledTrilinear) {
+    DRAKE_DEMAND(A.voxel_width() <= B.voxel_width());
+  }
   // Traverse and build in A. B's queried point and gradient are converted into
   // A for each cell; no registered representation stores posed data. A may
   // have either id; ContactSurface orders M and N by GeometryId.
@@ -413,13 +416,53 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
             CalcSpatialTolerance(A.voxel_width(), A.characteristic_length(),
                                  B.characteristic_length());
 
+        if (B.evaluation_mode() == VoxelSdfEvaluationMode::kSampledTrilinear) {
+          // Reject only when the B-frame AABB of the rotated host cube cannot
+          // overlap B's core grid. The dispatch-selected h_A <= h_B bounds the
+          // largest projected half-width by sqrt(3) h_A / 2 <= 0.866 h_B,
+          // while the stored sample-center lattice extends 1.5 h_B beyond the
+          // core boundary. Therefore every potentially overlapping center is
+          // inside B's interpolation domain.
+          const Vector3d extent_B = X_BA.rotation().matrix().cwiseAbs() *
+                                    Vector3d::Constant(voxel_radius);
+          const Vector3d core_lower_B = B.lower_cell_boundary();
+          const Vector3d core_upper_B = -core_lower_B;
+          const bool separated = ((center_B + extent_B).array() <
+                                  (core_lower_B.array() - spatial_tolerance))
+                                     .any() ||
+                                 ((center_B - extent_B).array() >
+                                  (core_upper_B.array() + spatial_tolerance))
+                                     .any();
+          if (separated) continue;
+        }
+
         // Every A voxel is visited. Pruning below only removes an affine shape
         // branch whose active region provably cannot intersect this voxel.
         const std::vector<SdfBranch> branches_A =
             PruneBranchesForVoxel(A.CalcCellSdfBranches(i, j, k), center_A,
                                   voxel_radius, spatial_tolerance);
         std::vector<SdfBranch> branches_B_A;
-        for (const SdfBranch& branch_B : B.EvaluateSdfBranches(center_B)) {
+        if (B.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveAffine) {
+          for (const SdfBranch& branch_B : B.EvaluateSdfBranches(center_B)) {
+            branches_B_A.push_back(ReExpressBranchInA(branch_B, X_AB, X_BA));
+          }
+        } else {
+          const std::optional<VoxelSdfGeometry::SdfSample> sample_B =
+              B.InterpolateSdf(center_B);
+          // A center whose host cube can overlap B's core must be bracketed by
+          // the fixed stored padding. Falling outside is an internal invariant
+          // failure, never permission to evaluate the primitive.
+          DRAKE_DEMAND(sample_B.has_value());
+          // Trilinear interpolation contains one scalar field in each lattice
+          // cell, not six recoverable Box face branches. The affine kernel
+          // linearizes that field at the host center, so its polygon is not the
+          // exact intersection of a curved trilinear equal-pressure surface.
+          // Persistent feature errors are a representation/kernel limitation;
+          // the branch-aware primitive mode remains the reference instead of
+          // serving as a hidden fallback. A zero interpolated gradient is
+          // valid; only the combined equal-pressure-plane degeneracy is
+          // rejected by the polygon kernel.
+          const SdfBranch branch_B{*sample_B, {}, 0, false};
           branches_B_A.push_back(ReExpressBranchInA(branch_B, X_AB, X_BA));
         }
         branches_B_A = PruneBranchesForVoxel(std::move(branches_B_A), center_A,

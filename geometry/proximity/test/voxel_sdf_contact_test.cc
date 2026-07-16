@@ -517,6 +517,82 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, MixedSphereBoxContact) {
   ExpectSurfaceInvariants(*box_grid_surface, id_sphere, id_box);
 }
 
+GTEST_TEST(VoxelSdfContactSurfaceTest, SampledBUsesOffLatticeInterpolator) {
+  const VoxelSdfGeometry A(Sphere(0.25), 0.5, 100.0);
+  const VoxelSdfGeometry B(Sphere(1.0), 1.0, 200.0,
+                           VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WA;
+  const RigidTransformd X_WB(Vector3d(0.9, 0.1, 0.0));
+  const Vector3d center_B = X_WB.inverse() * A.cell_center(0, 0, 0);
+  ASSERT_FALSE(
+      CompareMatrices(center_B, B.stored_sample_center(2, 2, 2), 1e-14));
+  const auto interpolated_B = B.InterpolateSdf(center_B);
+  ASSERT_TRUE(interpolated_B.has_value());
+
+  const auto surface =
+      CalcVoxelSdfCompliantContact(A, X_WA, id_A, B, X_WB, id_B);
+  ASSERT_NE(surface, nullptr);
+  ExpectSurfaceInvariants(*surface, id_A, id_B);
+  ASSERT_EQ(surface->num_faces(), 1);
+  const Vector3d expected_grad_p_B_W =
+      -B.pressure_scale() * (X_WB.rotation() * interpolated_B->gradient);
+  EXPECT_TRUE(CompareMatrices(surface->EvaluateGradE_N_W(0),
+                              expected_grad_p_B_W, kTolerance));
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, PureSampledContactsAreFinite) {
+  const VoxelSdfGeometry sphere_A(Sphere(1.0), 0.25, 125.0,
+                                  VoxelSdfEvaluationMode::kSampledTrilinear);
+  const VoxelSdfGeometry sphere_B(Sphere(1.0), 0.25, 150.0,
+                                  VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  const auto sphere_surface = CalcVoxelSdfCompliantContact(
+      sphere_A, RigidTransformd(), id_A, sphere_B,
+      RigidTransformd(Vector3d(1.5, 0.0, 0.0)), id_B);
+  ASSERT_NE(sphere_surface, nullptr);
+  ExpectSurfaceInvariants(*sphere_surface, id_A, id_B);
+  ExpectNoCoincidentFaces(*sphere_surface);
+
+  const VoxelSdfGeometry box(Box::MakeCube(2.0), 0.25, 200.0,
+                             VoxelSdfEvaluationMode::kSampledTrilinear);
+  const RigidTransformd X_WB(RotationMatrixd::MakeZRotation(0.2),
+                             Vector3d(1.4, 0.1, 0.0));
+  const auto rotated_surface = CalcVoxelSdfCompliantContact(
+      sphere_A, RigidTransformd(), id_A, box, X_WB, id_B);
+  ASSERT_NE(rotated_surface, nullptr);
+  ExpectSurfaceInvariants(*rotated_surface, id_A, id_B);
+  ExpectNoCoincidentFaces(*rotated_surface);
+}
+
+GTEST_TEST(VoxelSdfContactSurfaceTest, MixedEvaluationModesAndSeparation) {
+  const VoxelSdfGeometry primitive_sphere(Sphere(1.0), 0.25, 125.0);
+  const VoxelSdfGeometry sampled_sphere(
+      Sphere(1.0), 0.25, 125.0, VoxelSdfEvaluationMode::kSampledTrilinear);
+  const VoxelSdfGeometry primitive_box(Box::MakeCube(2.0), 0.5, 200.0);
+  const VoxelSdfGeometry sampled_box(Box::MakeCube(2.0), 0.5, 200.0,
+                                     VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto [id_sphere, id_box] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WB(Vector3d(1.4, 0.1, 0.0));
+
+  const auto sampled_host =
+      CalcVoxelSdfCompliantContact(sampled_sphere, RigidTransformd(), id_sphere,
+                                   primitive_box, X_WB, id_box);
+  ASSERT_NE(sampled_host, nullptr);
+  ExpectSurfaceInvariants(*sampled_host, id_sphere, id_box);
+
+  const auto sampled_non_host =
+      CalcVoxelSdfCompliantContact(primitive_sphere, RigidTransformd(),
+                                   id_sphere, sampled_box, X_WB, id_box);
+  ASSERT_NE(sampled_non_host, nullptr);
+  ExpectSurfaceInvariants(*sampled_non_host, id_sphere, id_box);
+
+  const auto separated = CalcVoxelSdfCompliantContact(
+      sampled_sphere, RigidTransformd(), id_sphere, sampled_box,
+      RigidTransformd(Vector3d(100.0, 0.0, 0.0)), id_box);
+  EXPECT_EQ(separated, nullptr);
+}
+
 GTEST_TEST(VoxelSdfContactSurfaceTest, SphereBoxFaceBranchesCloseGaps) {
   const VoxelSdfGeometry sphere(Sphere(1.0), 0.05, 1.0e8);
   const VoxelSdfGeometry box(Box::MakeCube(2.0), 0.05, 1.0e8);

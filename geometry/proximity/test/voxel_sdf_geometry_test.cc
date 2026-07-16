@@ -256,6 +256,15 @@ GTEST_TEST(VoxelSdfGeometryTest, AffineBranchAccess) {
   EXPECT_EQ(box.CalcCellSdfBranches(1, 2, 3).size(), 6u);
   EXPECT_EQ(box.EvaluateSdfBranches(Vector3d(0.25, 0.5, 0.75)).size(), 6u);
 
+  const VoxelSdfGeometry sampled_box(Box(2.0, 4.0, 6.0), 1.0, 10.0,
+                                     VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto sampled_branches = sampled_box.CalcCellSdfBranches(1, 2, 3);
+  ASSERT_EQ(sampled_branches.size(), 1u);
+  EXPECT_EQ(sampled_branches[0].sample.value,
+            sampled_box.sample(1, 2, 3).value);
+  EXPECT_TRUE(sampled_branches[0].active_region.empty());
+  EXPECT_EQ(sampled_branches[0].index, 0);
+  EXPECT_FALSE(sampled_branches[0].is_cell_invariant);
 }
 
 GTEST_TEST(VoxelSdfGeometryTest, CopyAndMoveOwnership) {
