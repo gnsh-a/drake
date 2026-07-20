@@ -25,11 +25,14 @@ drake_cc_binary(
         "//geometry:shape_specification",
         "//geometry/query_results:contact_surface",
         "//math:geometric_transform",
+        "//multibody/contact_solvers:tamsi_solver_statistics",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
         "//multibody/plant",
         "//multibody/tree",
         "//systems/analysis:simulator",
         "//systems/framework:diagram",
         "//systems/framework:diagram_builder",
+        "//systems/framework:event_collection",
     ],
 )
 

@@ -20,6 +20,8 @@
 #include "drake/geometry/query_results/contact_surface.h"
 #include "drake/geometry/shape_specification.h"
 #include "drake/math/rigid_transform.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
+#include "drake/multibody/contact_solvers/tamsi_solver_statistics.h"
 #include "drake/multibody/math/spatial_algebra.h"
 #include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/coulomb_friction.h"
@@ -31,6 +33,7 @@
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/diagram.h"
 #include "drake/systems/framework/diagram_builder.h"
+#include "drake/systems/framework/event_status.h"
 
 namespace drake {
 namespace tools {
@@ -58,7 +61,11 @@ using multibody::SpatialVelocity;
 using systems::Context;
 using systems::Diagram;
 using systems::DiagramBuilder;
+using systems::EventStatus;
 using systems::Simulator;
+
+using SapStatistics = multibody::contact_solvers::internal::SapStatistics;
+using TamsiStatistics = multibody::contact_solvers::internal::TamsiStatistics;
 
 struct DiskConfig {
   double radius{};
@@ -163,6 +170,29 @@ struct Row {
   double friction_force_y{};
   double friction_torque_z{};
   double eps{};
+};
+
+struct SapStatRow {
+  double time{};
+  int num_hydro_contacts{};
+  int num_iters{};
+  int num_line_search_iters{};
+  bool optimality_reached{};
+  bool cost_reached{};
+  double final_momentum_residual{};
+};
+
+struct TamsiStatRow {
+  double time{};
+  int num_hydro_contacts{};
+  int accepted_num_substeps{};
+  int num_substep_attempts{};
+  int num_solve_calls{};
+  int total_iterations{};
+  int max_iterations_per_solve{};
+  double final_vt_residual{};
+  multibody::TamsiSolverResult result{
+      multibody::TamsiSolverResult::kMaxIterationsReached};
 };
 
 std::string ConsumeValue(int* i, int argc, char* argv[]) {
@@ -376,6 +406,65 @@ void WriteRow(std::ofstream* out, const Row& row) {
        << "\n";
 }
 
+std::filesystem::path MakeSapStatsPath(
+    const std::filesystem::path& output_path) {
+  std::filesystem::path sap_stats_path = output_path;
+  sap_stats_path.replace_filename(output_path.stem().string() +
+                                  "_sap_stats.csv");
+  return sap_stats_path;
+}
+
+std::filesystem::path MakeTamsiStatsPath(
+    const std::filesystem::path& output_path) {
+  std::filesystem::path tamsi_stats_path = output_path;
+  tamsi_stats_path.replace_filename(output_path.stem().string() +
+                                    "_tamsi_stats.csv");
+  return tamsi_stats_path;
+}
+
+void WriteSapStats(const std::vector<SapStatRow>& rows,
+                   const std::filesystem::path& output_path) {
+  if (!output_path.parent_path().empty()) {
+    std::filesystem::create_directories(output_path.parent_path());
+  }
+  std::ofstream out(output_path);
+  if (!out.good()) {
+    throw std::runtime_error("Could not write " + output_path.string());
+  }
+  out.precision(17);
+  out << "time,num_hydro_contacts,num_iters,num_line_search_iters,"
+         "optimality_reached,cost_reached,final_momentum_residual\n";
+  for (const SapStatRow& row : rows) {
+    out << row.time << "," << row.num_hydro_contacts << "," << row.num_iters
+        << "," << row.num_line_search_iters << ","
+        << (row.optimality_reached ? 1 : 0) << ","
+        << (row.cost_reached ? 1 : 0) << ","
+        << row.final_momentum_residual << "\n";
+  }
+}
+
+void WriteTamsiStats(const std::vector<TamsiStatRow>& rows,
+                     const std::filesystem::path& output_path) {
+  if (!output_path.parent_path().empty()) {
+    std::filesystem::create_directories(output_path.parent_path());
+  }
+  std::ofstream out(output_path);
+  if (!out.good()) {
+    throw std::runtime_error("Could not write " + output_path.string());
+  }
+  out.precision(17);
+  out << "time,num_hydro_contacts,accepted_num_substeps,"
+         "num_substep_attempts,num_solve_calls,total_iterations,"
+         "max_iterations_per_solve,final_vt_residual,result\n";
+  for (const TamsiStatRow& row : rows) {
+    out << row.time << "," << row.num_hydro_contacts << ","
+        << row.accepted_num_substeps << "," << row.num_substep_attempts << ","
+        << row.num_solve_calls << "," << row.total_iterations << ","
+        << row.max_iterations_per_solve << "," << row.final_vt_residual << ","
+        << static_cast<int>(row.result) << "\n";
+  }
+}
+
 // Writes legacy VTK directly so the comparison remains usable without a
 // visualization dependency. The pressure field is sampled at mesh vertices,
 // matching ContactSurface's native piecewise-linear pressure representation.
@@ -511,6 +600,9 @@ int DoMain(int argc, char* argv[]) {
   disk_planar_joint.set_angular_velocity(&plant_context, w0.z());
 
   const std::filesystem::path output_path(args.output);
+  const std::filesystem::path sap_stats_path = MakeSapStatsPath(output_path);
+  const std::filesystem::path tamsi_stats_path =
+      MakeTamsiStatsPath(output_path);
   if (!output_path.parent_path().empty()) {
     std::filesystem::create_directories(output_path.parent_path());
   }
@@ -523,6 +615,55 @@ int DoMain(int argc, char* argv[]) {
 
   Simulator<double> simulator(*diagram, std::move(context));
   simulator.set_target_realtime_rate(0.0);
+
+  std::vector<SapStatRow> sap_stats;
+  std::vector<TamsiStatRow> tamsi_stats;
+  simulator.set_monitor([&plant, &sap_stats,
+                         &tamsi_stats](const Context<double>& root_context) {
+    const Context<double>& plant_ctx = plant.GetMyContextFromRoot(root_context);
+    const std::optional<SapStatistics> sap =
+        plant.EvalSapSolverStatistics(plant_ctx);
+    const std::optional<TamsiStatistics> tamsi =
+        plant.EvalTamsiSolverStatistics(plant_ctx);
+    if (!sap.has_value() && !tamsi.has_value()) {
+      return EventStatus::Succeeded();
+    }
+
+    const ContactResults<double>& contacts =
+        plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+            plant_ctx);
+    const int num_hydro_contacts = contacts.num_hydroelastic_contacts();
+    const double time = root_context.get_time();
+
+    if (sap.has_value()) {
+      SapStatRow row;
+      row.time = time;
+      row.num_hydro_contacts = num_hydro_contacts;
+      row.num_iters = sap->num_iters;
+      row.num_line_search_iters = sap->num_line_search_iters;
+      row.optimality_reached = sap->optimality_criterion_reached;
+      row.cost_reached = sap->cost_criterion_reached;
+      row.final_momentum_residual = sap->momentum_residual.empty()
+                                        ? 0.0
+                                        : sap->momentum_residual.back();
+      sap_stats.push_back(row);
+    }
+
+    if (tamsi.has_value()) {
+      TamsiStatRow row;
+      row.time = time;
+      row.num_hydro_contacts = num_hydro_contacts;
+      row.accepted_num_substeps = tamsi->accepted_num_substeps;
+      row.num_substep_attempts = tamsi->num_substep_attempts;
+      row.num_solve_calls = tamsi->num_solve_calls;
+      row.total_iterations = tamsi->total_iterations;
+      row.max_iterations_per_solve = tamsi->max_iterations_per_solve;
+      row.final_vt_residual = tamsi->final_vt_residual;
+      row.result = tamsi->result;
+      tamsi_stats.push_back(row);
+    }
+    return EventStatus::Succeeded();
+  });
 
   simulator.Initialize();
 
@@ -543,8 +684,12 @@ int DoMain(int argc, char* argv[]) {
     WriteRow(&out, final);
   }
 
+  WriteSapStats(sap_stats, sap_stats_path);
+  WriteTamsiStats(tamsi_stats, tamsi_stats_path);
   if (!args.quiet) {
     std::cout << "wrote " << output_path << "\n";
+    std::cout << "wrote " << sap_stats_path << "\n";
+    std::cout << "wrote " << tamsi_stats_path << "\n";
   }
   return 0;
 }
