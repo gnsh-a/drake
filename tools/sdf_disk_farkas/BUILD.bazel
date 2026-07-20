@@ -1,0 +1,26 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_cc.bzl", "drake_cc_binary")
+
+package(default_visibility = ["//visibility:private"])
+
+drake_cc_binary(
+    name = "disk_contact_reference",
+    srcs = ["disk_contact_reference.cc"],
+    data = ["disk_plane.yaml"],
+    deps = [
+        "//common:name_value",
+        "//common/yaml:yaml_io",
+        "//geometry:geometry_ids",
+        "//geometry:proximity_properties",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//multibody/plant",
+        "//multibody/tree",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+        "//systems/framework:diagram_builder",
+    ],
+)
+
+add_lint_tests()
