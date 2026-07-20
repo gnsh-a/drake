@@ -2,6 +2,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -30,7 +31,6 @@
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/diagram.h"
 #include "drake/systems/framework/diagram_builder.h"
-#include "drake/systems/framework/event_status.h"
 
 namespace drake {
 namespace tools {
@@ -130,6 +130,8 @@ struct SceneConfig {
 struct Args {
   std::string scene{"tools/sdf_disk_farkas/disk_plane.yaml"};
   std::string output{"tools/hydro_compare/out/sdf_disk_farkas/tet.csv"};
+  std::optional<std::string> surface_output;
+  std::optional<double> sdf_target_voxel_size;
   std::string representation{"tet"};
   int num_frames{600};
   double fps{200.0};
@@ -154,6 +156,8 @@ struct Row {
   int hydro_contacts{};
   Vector3d contact_force{Vector3d::Zero()};
   double contact_area{};
+  int surface_vertices{};
+  int surface_faces{};
   double normal_force_z{};
   double friction_force_x{};
   double friction_force_y{};
@@ -177,6 +181,10 @@ Args ParseArgs(int argc, char* argv[]) {
       args.scene = ConsumeValue(&i, argc, argv);
     } else if (arg == "--output") {
       args.output = ConsumeValue(&i, argc, argv);
+    } else if (arg == "--surface-output") {
+      args.surface_output = ConsumeValue(&i, argc, argv);
+    } else if (arg == "--sdf-target-voxel-size") {
+      args.sdf_target_voxel_size = std::stod(ConsumeValue(&i, argc, argv));
     } else if (arg == "--representation") {
       args.representation = ConsumeValue(&i, argc, argv);
     } else if (arg == "--num-frames") {
@@ -207,6 +215,10 @@ Args ParseArgs(int argc, char* argv[]) {
   }
   if (args.time_step.has_value() && *args.time_step <= 0.0) {
     throw std::runtime_error("--time-step must be positive.");
+  }
+  if (args.sdf_target_voxel_size.has_value() &&
+      *args.sdf_target_voxel_size <= 0.0) {
+    throw std::runtime_error("--sdf-target-voxel-size must be positive.");
   }
   if (args.representation != "tet" && args.representation != "voxel_sdf") {
     throw std::runtime_error(
@@ -313,6 +325,10 @@ Row SampleRow(const multibody::MultibodyPlant<double>& plant,
     const auto& info = contacts.hydroelastic_contact_info(i);
     const auto& surface = info.contact_surface();
     row.contact_area += surface.total_area();
+    if (!surface.is_triangle()) {
+      row.surface_vertices += surface.poly_mesh_W().num_vertices();
+      row.surface_faces += surface.poly_mesh_W().num_faces();
+    }
 
     SpatialForce<double> F_C_W = info.F_Ac_W();
     const bool disk_is_A = ContainsGeometryId(disk_geometries, surface.id_M());
@@ -340,8 +356,9 @@ Row SampleRow(const multibody::MultibodyPlant<double>& plant,
 void WriteHeader(std::ofstream* out) {
   *out << "time,x,y,z,qx,qy,qz,qw,wx,wy,wz,vx,vy,vz,angular_speed,"
           "linear_speed,point_contacts,hydro_contacts,contact_force_x,"
-          "contact_force_y,contact_force_z,contact_area,normal_force_z,"
-          "friction_force_x,friction_force_y,friction_torque_z,eps\n";
+          "contact_force_y,contact_force_z,contact_area,surface_vertices,"
+          "surface_faces,normal_force_z,friction_force_x,friction_force_y,"
+          "friction_torque_z,eps\n";
 }
 
 void WriteRow(std::ofstream* out, const Row& row) {
@@ -353,9 +370,69 @@ void WriteRow(std::ofstream* out, const Row& row) {
        << "," << row.point_contacts << "," << row.hydro_contacts << ","
        << row.contact_force.x() << "," << row.contact_force.y() << ","
        << row.contact_force.z() << "," << row.contact_area << ","
+       << row.surface_vertices << "," << row.surface_faces << ","
        << row.normal_force_z << "," << row.friction_force_x << ","
        << row.friction_force_y << "," << row.friction_torque_z << "," << row.eps
        << "\n";
+}
+
+// Writes legacy VTK directly so the comparison remains usable without a
+// visualization dependency. The pressure field is sampled at mesh vertices,
+// matching ContactSurface's native piecewise-linear pressure representation.
+void WriteContactSurfaceVtk(const multibody::MultibodyPlant<double>& plant,
+                            const Context<double>& root_context,
+                            const std::filesystem::path& output_path) {
+  const Context<double>& plant_context =
+      plant.GetMyContextFromRoot(root_context);
+  const ContactResults<double>& contacts =
+      plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+          plant_context);
+  if (contacts.num_hydroelastic_contacts() != 1) {
+    throw std::runtime_error(
+        "Expected exactly one hydroelastic contact before exporting the "
+        "surface.");
+  }
+  const auto& surface = contacts.hydroelastic_contact_info(0).contact_surface();
+  if (surface.is_triangle()) {
+    throw std::runtime_error("Expected polygonal hydroelastic contact output.");
+  }
+
+  if (!output_path.parent_path().empty()) {
+    std::filesystem::create_directories(output_path.parent_path());
+  }
+  std::ofstream out(output_path);
+  if (!out.good()) {
+    throw std::runtime_error("Could not write " + output_path.string());
+  }
+  out << std::setprecision(std::numeric_limits<double>::max_digits10);
+  const auto& mesh = surface.poly_mesh_W();
+  const auto& pressure = surface.poly_e_MN();
+  out << "# vtk DataFile Version 3.0\n";
+  out << "Disk-Box hydroelastic contact surface\n";
+  out << "ASCII\n";
+  out << "DATASET POLYDATA\n";
+  out << "POINTS " << mesh.num_vertices() << " double\n";
+  for (int v = 0; v < mesh.num_vertices(); ++v) {
+    const Vector3<double>& p_WV = mesh.vertex(v);
+    out << p_WV.x() << " " << p_WV.y() << " " << p_WV.z() << "\n";
+  }
+  out << "POLYGONS " << mesh.num_faces() << " " << mesh.face_data().size()
+      << "\n";
+  size_t data_index = 0;
+  for (int f = 0; f < mesh.num_faces(); ++f) {
+    const int count = mesh.face_data().at(data_index++);
+    out << count;
+    for (int v = 0; v < count; ++v) {
+      out << " " << mesh.face_data().at(data_index++);
+    }
+    out << "\n";
+  }
+  out << "POINT_DATA " << mesh.num_vertices() << "\n";
+  out << "SCALARS pressure double 1\n";
+  out << "LOOKUP_TABLE default\n";
+  for (int v = 0; v < mesh.num_vertices(); ++v) {
+    out << pressure.EvaluateAtVertex(v) << "\n";
+  }
 }
 
 void CheckNoPointContact(const Row& row) {
@@ -374,6 +451,8 @@ int DoMain(int argc, char* argv[]) {
   const double frame_dt = 1.0 / args.fps;
   const double sim_dt =
       args.time_step.value_or(frame_dt / static_cast<double>(args.substeps));
+  const double resolution_hint =
+      args.sdf_target_voxel_size.value_or(scene.mesh.sdf_target_voxel_size);
   const double density = scene.disk.density.value_or(1000.0);
   const double radius = scene.disk.radius;
   const double mass = density * M_PI * radius * radius * scene.disk.thickness;
@@ -391,9 +470,8 @@ int DoMain(int argc, char* argv[]) {
       "disk", SpatialInertia<double>::SolidCylinderWithMass(
                   mass, radius, scene.disk.thickness, Vector3d::UnitZ()));
   ProximityProperties disk_props = MakeProximityProperties(
-      scene.disk.hydroelastic_modulus, scene.mesh.sdf_target_voxel_size,
-      scene.material.friction, scene.material.relaxation_time,
-      args.representation);
+      scene.disk.hydroelastic_modulus, resolution_hint, scene.material.friction,
+      scene.material.relaxation_time, args.representation);
   plant.RegisterCollisionGeometry(disk_body, RigidTransformd::Identity(),
                                   Cylinder(radius, scene.disk.thickness),
                                   "disk_collision", std::move(disk_props));
@@ -405,9 +483,8 @@ int DoMain(int argc, char* argv[]) {
       RigidTransformd::Identity(), Vector3d::Zero());
 
   ProximityProperties box_props = MakeProximityProperties(
-      scene.box.hydroelastic_modulus, scene.mesh.sdf_target_voxel_size,
-      scene.material.friction, scene.material.relaxation_time,
-      args.representation);
+      scene.box.hydroelastic_modulus, resolution_hint, scene.material.friction,
+      scene.material.relaxation_time, args.representation);
   plant.RegisterCollisionGeometry(
       plant.world_body(), RigidTransformd::Identity(),
       Box(scene.box.full_size.x(), scene.box.full_size.y(),
@@ -456,6 +533,10 @@ int DoMain(int argc, char* argv[]) {
   for (int frame = 1; frame <= args.num_frames; ++frame) {
     const double time = frame * frame_dt;
     simulator.AdvanceTo(time);
+    if (frame == 1 && args.surface_output.has_value()) {
+      WriteContactSurfaceVtk(plant, simulator.get_context(),
+                             *args.surface_output);
+    }
     final = SampleRow(plant, disk_body, disk_geometries, radius,
                       simulator.get_context(), time);
     CheckNoPointContact(final);
