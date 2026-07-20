@@ -74,6 +74,17 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
     : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus,
                        evaluation_mode) {}
 
+VoxelSdfGeometry::VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
+                                   double hydroelastic_modulus)
+    : VoxelSdfGeometry(cylinder, voxel_width, hydroelastic_modulus,
+                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode)
+    : VoxelSdfGeometry(VoxelSdfShape(cylinder), voxel_width,
+                       hydroelastic_modulus, evaluation_mode) {}
+
 VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus,
@@ -101,6 +112,12 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
       evaluation_mode_(evaluation_mode) {
   const std::string shape_name(shape_.shape_name());
   ValidateEvaluationMode(evaluation_mode_, shape_name);
+  if (evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear &&
+      !shape_.supports_sampled_trilinear()) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF does not support sampled trilinear evaluation",
+        shape_name));
+  }
   if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
     throw std::logic_error(fmt::format(
         "The {} voxel SDF width must be finite and strictly positive",

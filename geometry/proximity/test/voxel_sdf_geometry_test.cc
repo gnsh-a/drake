@@ -244,6 +244,50 @@ GTEST_TEST(VoxelSdfGeometryTest, SphereGridAndCachedSamples) {
   EXPECT_EQ(one_cell.sample(0, 0, 0).value, -0.25);
 }
 
+GTEST_TEST(VoxelSdfGeometryTest, CylinderGridAndCachedSamples) {
+  const Cylinder cylinder(2.0, 1.0);
+  const VoxelSdfGeometry dut(cylinder, 0.5, 10.0);
+  EXPECT_EQ(dut.evaluation_mode(), VoxelSdfEvaluationMode::kPrimitiveAffine);
+  EXPECT_TRUE(CompareMatrices(dut.cell_counts(), Vector3<int>(8, 8, 2)));
+  EXPECT_TRUE(
+      CompareMatrices(dut.lower_cell_boundary(), Vector3d(-2.0, -2.0, -0.5)));
+  EXPECT_EQ(dut.characteristic_length(), 0.5);
+  EXPECT_EQ(dut.pressure_scale(), 20.0);
+
+  const fcl::Cylinderd fcl_cylinder(cylinder.radius(), cylinder.length());
+  for (const Vector3<int>& index :
+       {Vector3<int>(0, 0, 0), Vector3<int>(4, 4, 0), Vector3<int>(7, 3, 1)}) {
+    const Vector3d p_GQ = dut.cell_center(index.x(), index.y(), index.z());
+    point_distance::DistanceToPoint<double> query(
+        GeometryId::get_new_id(), math::RigidTransformd(), p_GQ);
+    const SignedDistanceToPoint<double> expected = query(fcl_cylinder);
+    const auto& actual = dut.sample(index.x(), index.y(), index.z());
+    EXPECT_EQ(actual.value, expected.distance);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
+  }
+
+  // Every Cylinder cell exposes all cap and wall branches; this remains true
+  // for the two-cell thickness used here and for a one-cell-thick grid.
+  EXPECT_EQ(dut.CalcCellSdfBranches(4, 4, 0).size(), 3u);
+  const VoxelSdfGeometry one_cell(Cylinder(2.0, 0.25), 1.0, 10.0);
+  EXPECT_EQ(one_cell.cell_counts().z(), 1);
+  EXPECT_EQ(one_cell.CalcCellSdfBranches(2, 2, 0).size(), 3u);
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, CylinderRejectsSampledTrilinear) {
+  const Cylinder cylinder(2.0, 1.0);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(cylinder, 0.5, 10.0,
+                       VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*Cylinder.*does not support sampled trilinear.*");
+  // Reject the generic owned-shape path as well; it must not bypass a shape's
+  // evaluation-mode capability.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(VoxelSdfShape(cylinder), 0.5, 10.0,
+                       VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*Cylinder.*does not support sampled trilinear.*");
+}
+
 GTEST_TEST(VoxelSdfGeometryTest, AffineBranchAccess) {
   const VoxelSdfGeometry sphere(Sphere(2.5), 1.0, 10.0);
   const auto sphere_branches = sphere.CalcCellSdfBranches(2, 2, 2);

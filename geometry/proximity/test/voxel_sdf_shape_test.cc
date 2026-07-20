@@ -23,8 +23,8 @@ namespace {
 using Eigen::Vector3d;
 
 static_assert(std::is_constructible_v<VoxelSdfShape, const Box&>);
+static_assert(std::is_constructible_v<VoxelSdfShape, const Cylinder&>);
 static_assert(std::is_constructible_v<VoxelSdfShape, const Sphere&>);
-static_assert(!std::is_constructible_v<VoxelSdfShape, const Cylinder&>);
 
 GTEST_TEST(VoxelSdfShapeTest, BoxEvaluationAndGeometryData) {
   const Box box(2.0, 4.0, 6.0);
@@ -33,6 +33,7 @@ GTEST_TEST(VoxelSdfShapeTest, BoxEvaluationAndGeometryData) {
   EXPECT_TRUE(
       CompareMatrices(dut.bounding_box_half_widths(), Vector3d(1.0, 2.0, 3.0)));
   EXPECT_EQ(dut.characteristic_length(), 1.0);
+  EXPECT_TRUE(dut.supports_sampled_trilinear());
 
   const fcl::Boxd fcl_box(box.width(), box.depth(), box.height());
   for (const Vector3d& p_GQ :
@@ -48,6 +49,33 @@ GTEST_TEST(VoxelSdfShapeTest, BoxEvaluationAndGeometryData) {
   }
 }
 
+GTEST_TEST(VoxelSdfShapeTest, CylinderEvaluationAndGeometryData) {
+  const Cylinder cylinder(2.0, 1.0);
+  const VoxelSdfShape dut(cylinder);
+  EXPECT_EQ(dut.shape_name(), "Cylinder");
+  EXPECT_TRUE(
+      CompareMatrices(dut.bounding_box_half_widths(), Vector3d(2.0, 2.0, 0.5)));
+  EXPECT_EQ(dut.characteristic_length(), 0.5);
+  EXPECT_FALSE(dut.supports_sampled_trilinear());
+
+  // VoxelSdfShape deliberately delegates the exact value and gradient to the
+  // same primitive-distance implementation used by SceneGraph. Exercise the
+  // centerline convention, the cap and wall interiors, the rim, and an
+  // exterior point where the distance is not affine.
+  const fcl::Cylinderd fcl_cylinder(cylinder.radius(), cylinder.length());
+  for (const Vector3d& p_GQ :
+       {Vector3d(0.0, 0.0, 0.0), Vector3d(1.0, 0.0, 0.0),
+        Vector3d(0.0, 0.0, 0.25), Vector3d(2.0, 0.0, 0.5),
+        Vector3d(3.0, 0.0, 1.5)}) {
+    const VoxelSdfShape::Sample actual = dut.Evaluate(p_GQ);
+    point_distance::DistanceToPoint<double> query(
+        GeometryId::get_new_id(), math::RigidTransformd(), p_GQ);
+    const SignedDistanceToPoint<double> expected = query(fcl_cylinder);
+    EXPECT_EQ(actual.value, expected.distance);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
+  }
+}
+
 GTEST_TEST(VoxelSdfShapeTest, SphereEvaluationAndGeometryData) {
   const Sphere sphere(2.5);
   const VoxelSdfShape dut(sphere);
@@ -55,6 +83,7 @@ GTEST_TEST(VoxelSdfShapeTest, SphereEvaluationAndGeometryData) {
   EXPECT_TRUE(
       CompareMatrices(dut.bounding_box_half_widths(), Vector3d::Constant(2.5)));
   EXPECT_EQ(dut.characteristic_length(), 2.5);
+  EXPECT_TRUE(dut.supports_sampled_trilinear());
 
   const fcl::Sphered fcl_sphere(sphere.radius());
   for (const Vector3d& p_GQ :
@@ -110,6 +139,48 @@ GTEST_TEST(VoxelSdfShapeTest, BoxAffineBranches) {
     if (is_active) active.push_back(branch.index);
   }
   EXPECT_EQ(active, std::vector<int>({0, 2}));
+}
+
+GTEST_TEST(VoxelSdfShapeTest, CylinderAffineBranches) {
+  const VoxelSdfShape dut(Cylinder(2.0, 1.0));
+
+  struct Case {
+    Vector3d p_GQ;
+    std::vector<int> active_indices;
+  };
+  // Indices are stable: top cap = 0, bottom cap = 1, radial wall = 2.
+  // Include both cap-wall and cap-cap medial-axis ties.
+  for (const Case& test :
+       {Case{Vector3d(0.0, 0.0, 0.4), {0}}, Case{Vector3d(0.0, 0.0, -0.4), {1}},
+        Case{Vector3d(1.9, 0.0, 0.0), {2}},
+        Case{Vector3d(1.6, 0.0, 0.1), {0, 2}},
+        Case{Vector3d::Zero(), {0, 1}}}) {
+    const auto branches = dut.CalcAffineBranches(test.p_GQ);
+    ASSERT_EQ(branches.size(), 3u);
+    std::vector<int> active;
+    double max_value = -std::numeric_limits<double>::infinity();
+    for (int i = 0; i < static_cast<int>(branches.size()); ++i) {
+      const auto& branch = branches[i];
+      EXPECT_EQ(branch.index, i);
+      EXPECT_EQ(branch.active_region.size(), 2u);
+      EXPECT_FALSE(branch.is_cell_invariant);
+      max_value = std::max(max_value, branch.sample.value);
+      const bool is_active =
+          std::all_of(branch.active_region.begin(), branch.active_region.end(),
+                      [&test](const auto& half_space) {
+                        return half_space.Evaluate(test.p_GQ) <= 0.0;
+                      });
+      if (is_active) active.push_back(branch.index);
+    }
+    EXPECT_EQ(active, test.active_indices);
+    // The max-of-features expression is the exact Cylinder SDF throughout
+    // the interior (outside a rim it would be a Euclidean corner distance).
+    EXPECT_EQ(max_value, dut.Evaluate(test.p_GQ).value);
+  }
+
+  // The radial wall has a deterministic finite direction on the centerline.
+  const auto center_branches = dut.CalcAffineBranches(Vector3d::Zero());
+  EXPECT_EQ(center_branches[2].sample.gradient, Vector3d::UnitX());
 }
 
 GTEST_TEST(VoxelSdfShapeTest, SphereHasOneAffineBranch) {

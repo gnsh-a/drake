@@ -51,6 +51,7 @@ class VoxelSdfShape {
   };
 
   explicit VoxelSdfShape(const Box& box);
+  explicit VoxelSdfShape(const Cylinder& cylinder);
   explicit VoxelSdfShape(const Sphere& sphere);
 
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VoxelSdfShape);
@@ -58,8 +59,9 @@ class VoxelSdfShape {
   Sample Evaluate(const Vector3<double>& p_GQ) const;
 
   /* Calculates the affine SDF pieces at `p_GQ`. A Sphere has one local affine
-   piece. A Box has six exact face-affine pieces; their active regions partition
-   the Box interior, apart from shared boundaries. */
+   piece. A Box has six exact face-affine pieces, and a Cylinder has exact top
+   and bottom cap pieces plus a locally affine radial-wall piece. Their active
+   regions partition the shape interior, apart from shared boundaries. */
   std::vector<AffineBranch> CalcAffineBranches(
       const Vector3<double>& p_GQ) const;
 
@@ -73,11 +75,16 @@ class VoxelSdfShape {
   Vector3<double> bounding_box_half_widths() const;
   double characteristic_length() const;
   std::string_view shape_name() const;
+  bool supports_sampled_trilinear() const;
   static std::string_view supported_shape_names();
 
  private:
   struct BoxData {
     Vector3<double> half_widths;
+  };
+  struct CylinderData {
+    double radius{};
+    double half_length{};
   };
   struct SphereData {
     double radius{};
@@ -92,6 +99,20 @@ class VoxelSdfShape {
   static Vector3<double> DoCalcBoundingBoxHalfWidths(const BoxData& box);
   static double DoCalcCharacteristicLength(const BoxData& box);
   static std::string_view DoGetShapeName(const BoxData& box);
+  static bool DoSupportsSampledTrilinear(const BoxData& box);
+
+  static Sample DoEvaluate(const CylinderData& cylinder,
+                           const Vector3<double>& p_GQ);
+  static std::vector<AffineBranch> DoCalcAffineBranches(
+      const CylinderData& cylinder, const Vector3<double>& p_GQ);
+  static std::vector<AffineBranch> DoCalcAffineBranches(
+      const CylinderData& cylinder, const Vector3<double>& p_GQ,
+      const Sample& single_branch_sample);
+  static Vector3<double> DoCalcBoundingBoxHalfWidths(
+      const CylinderData& cylinder);
+  static double DoCalcCharacteristicLength(const CylinderData& cylinder);
+  static std::string_view DoGetShapeName(const CylinderData& cylinder);
+  static bool DoSupportsSampledTrilinear(const CylinderData& cylinder);
 
   static Sample DoEvaluate(const SphereData& sphere,
                            const Vector3<double>& p_GQ);
@@ -103,8 +124,9 @@ class VoxelSdfShape {
   static Vector3<double> DoCalcBoundingBoxHalfWidths(const SphereData& sphere);
   static double DoCalcCharacteristicLength(const SphereData& sphere);
   static std::string_view DoGetShapeName(const SphereData& sphere);
+  static bool DoSupportsSampledTrilinear(const SphereData& sphere);
 
-  std::variant<BoxData, SphereData> data_;
+  std::variant<BoxData, CylinderData, SphereData> data_;
 };
 
 }  // namespace hydroelastic
