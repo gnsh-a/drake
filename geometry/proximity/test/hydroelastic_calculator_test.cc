@@ -720,6 +720,47 @@ GTEST_TEST(ContactCalculatorTest, MixedVoxelPairUsesFinerSphereGrid) {
   ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *reversed_surface);
 }
 
+GTEST_TEST(ContactCalculatorTest, CylinderVoxelDispatch) {
+  Geometries geometries;
+  unordered_map<GeometryId, RigidTransform<double>> X_WGs;
+
+  ProximityProperties cylinder_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.25, 100.0, &cylinder_properties);
+  ProximityProperties box_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(0.5, 100.0, &box_properties);
+  const GeometryId cylinder_id = GeometryId::get_new_id();
+  const GeometryId box_id = GeometryId::get_new_id();
+  ASSERT_LT(cylinder_id, box_id);
+  geometries.MaybeAddGeometry(Cylinder(1.0, 0.4), cylinder_id,
+                              cylinder_properties);
+  geometries.MaybeAddGeometry(Box(4.0, 4.0, 1.0), box_id, box_properties);
+  X_WGs.emplace(cylinder_id, RigidTransform<double>(Vector3d(0.0, 0.0, 0.65)));
+  X_WGs.emplace(box_id, RigidTransform<double>());
+
+  const VoxelSdfGeometry& cylinder =
+      geometries.compliant_geometry(cylinder_id).voxel_sdf();
+  const VoxelSdfGeometry& box =
+      geometries.compliant_geometry(box_id).voxel_sdf();
+  const auto direct =
+      CalcVoxelSdfCompliantContact(cylinder, X_WGs.at(cylinder_id), cylinder_id,
+                                   box, X_WGs.at(box_id), box_id);
+  ASSERT_NE(direct, nullptr);
+
+  ContactCalculator<double> calculator(
+      &X_WGs, &geometries, HydroelasticContactRepresentation::kPolygon);
+  auto [result, surface] =
+      calculator.MaybeMakeContactSurface(cylinder_id, box_id);
+  ASSERT_EQ(result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(surface, nullptr);
+  ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *direct);
+
+  auto [reversed_result, reversed_surface] =
+      calculator.MaybeMakeContactSurface(box_id, cylinder_id);
+  ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
+  ASSERT_NE(reversed_surface, nullptr);
+  ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *reversed_surface);
+}
+
 GTEST_TEST(ContactCalculatorTest, SampledVoxelPairOrderUsesFinerGrid) {
   Geometries geometries;
   unordered_map<GeometryId, RigidTransform<double>> X_WGs;

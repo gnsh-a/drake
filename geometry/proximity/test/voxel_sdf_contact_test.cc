@@ -517,6 +517,39 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, MixedSphereBoxContact) {
   ExpectSurfaceInvariants(*box_grid_surface, id_sphere, id_box);
 }
 
+GTEST_TEST(VoxelSdfContactSurfaceTest, CylinderBoxContact) {
+  // A thin Cylinder exercises the cap branches on a grid with only two cells
+  // through its length. The Box is deliberately coarser so the calculator
+  // traverses the Cylinder grid.
+  const VoxelSdfGeometry cylinder(Cylinder(1.0, 0.4), 0.25, 100.0);
+  const VoxelSdfGeometry box(Box(4.0, 4.0, 1.0), 0.5, 100.0);
+  const auto [id_cylinder, id_box] = MakeOrderedGeometryIds();
+  const RigidTransformd X_WB;
+
+  const auto aligned = CalcVoxelSdfCompliantContact(
+      cylinder, RigidTransformd(Vector3d(0.0, 0.0, 0.65)), id_cylinder, box,
+      X_WB, id_box);
+  ASSERT_NE(aligned, nullptr);
+  ExpectSurfaceInvariants(*aligned, id_cylinder, id_box);
+  ExpectNoCoincidentFaces(*aligned);
+
+  // Tilting the Cylinder makes cap, radial-wall, and their shared rim regions
+  // participate in one contact. This also verifies that branch gradients and
+  // active regions are transformed from the arbitrary Cylinder pose.
+  const RigidTransformd X_WC_tilted(RotationMatrixd::MakeXRotation(0.15),
+                                    Vector3d(0.0, 0.0, 0.8));
+  const auto tilted = CalcVoxelSdfCompliantContact(
+      cylinder, X_WC_tilted, id_cylinder, box, X_WB, id_box);
+  ASSERT_NE(tilted, nullptr);
+  ExpectSurfaceInvariants(*tilted, id_cylinder, id_box);
+  ExpectNoCoincidentFaces(*tilted);
+
+  const auto separated = CalcVoxelSdfCompliantContact(
+      cylinder, RigidTransformd(Vector3d(0.0, 0.0, 1.0)), id_cylinder, box,
+      X_WB, id_box);
+  EXPECT_EQ(separated, nullptr);
+}
+
 GTEST_TEST(VoxelSdfContactSurfaceTest, SampledBUsesOffLatticeInterpolator) {
   const VoxelSdfGeometry A(Sphere(0.25), 0.5, 100.0);
   const VoxelSdfGeometry B(Sphere(1.0), 1.0, 200.0,

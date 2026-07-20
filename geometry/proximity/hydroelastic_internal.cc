@@ -524,9 +524,29 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Cylinder& cylinder, const ProximityProperties& props) {
-  ValidateCompliantRepresentationSelector(props, cylinder.type_name(), false);
+  ValidateCompliantRepresentationSelector(props, cylinder.type_name(), true);
   const double margin = NonNegativeDouble("Cylinder", "compliant")
                             .Extract(props, kHydroGroup, kMargin, 0.0);
+
+  if (props.HasProperty(kHydroGroup, kCompliantRepresentation)) {
+    if (margin != 0.0) {
+      throw std::logic_error(
+          "The Cylinder voxel SDF compliant representation requires zero "
+          "margin");
+    }
+    PositiveDouble validator("Cylinder voxel SDF", "compliant");
+    const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
+    const double hydroelastic_modulus =
+        validator.Extract(props, kHydroGroup, kElastic);
+    const VoxelSdfEvaluationMode evaluation_mode =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
+                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
+    return CompliantGeometry(VoxelSdfGeometry(
+        cylinder, voxel_width, hydroelastic_modulus, evaluation_mode));
+  }
+
+  // Keep the legacy tetrahedral representation unchanged unless the caller
+  // explicitly selects voxel SDF.
   const Cylinder inflated_cylinder(cylinder.radius() + margin,
                                    cylinder.length() + 2.0 * margin);
 

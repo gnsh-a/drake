@@ -417,6 +417,7 @@ GTEST_TEST(Hydroelastic, GeometriesPopulationAndQuery) {
 
 GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   const Box box(2.0, 3.0, 4.0);
+  const Cylinder cylinder(1.0, 2.0);
   const Sphere sphere(1.25);
   ProximityProperties voxel_properties;
   AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &voxel_properties);
@@ -496,13 +497,27 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
       ".*Unknown compliant hydroelastic "
       "representation.*not_a_representation.*");
 
+  const GeometryId cylinder_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(cylinder, cylinder_id, voxel_properties);
+  const CompliantGeometry& cylinder_voxel =
+      geometries.compliant_geometry(cylinder_id);
+  ASSERT_TRUE(cylinder_voxel.is_voxel_sdf());
+  EXPECT_EQ(cylinder_voxel.voxel_sdf().characteristic_length(), 1.0);
+  EXPECT_TRUE(CompareMatrices(cylinder_voxel.voxel_sdf().cell_counts(),
+                              Vector3<int>(4, 4, 4)));
+  EXPECT_EQ(cylinder_voxel.voxel_sdf().evaluation_mode(),
+            VoxelSdfEvaluationMode::kPrimitiveAffine);
+
   DRAKE_EXPECT_THROWS_MESSAGE(
-      geometries.MaybeAddGeometry(Cylinder(1.0, 2.0), GeometryId::get_new_id(),
-                                  voxel_properties),
-      ".*only supported for Box and Sphere.*Cylinder.*");
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      MakeCompliantRepresentation(Cylinder(1.0, 2.0), voxel_properties),
-      ".*only supported for Box and Sphere.*Cylinder.*");
+      geometries.MaybeAddGeometry(cylinder, GeometryId::get_new_id(),
+                                  sampled_properties),
+      ".*Cylinder.*does not support sampled trilinear.*");
+
+  // Without the selector, Cylinder keeps its legacy compliant mesh.
+  const GeometryId cylinder_mesh_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(cylinder, cylinder_mesh_id, mesh_properties);
+  EXPECT_TRUE(geometries.compliant_geometry(cylinder_mesh_id).is_mesh());
+  EXPECT_FALSE(geometries.compliant_geometry(cylinder_mesh_id).is_voxel_sdf());
 
   ProximityProperties with_margin(voxel_properties);
   with_margin.AddProperty(kHydroGroup, kMargin, 0.01);
@@ -513,6 +528,10 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
       geometries.MaybeAddGeometry(sphere, GeometryId::get_new_id(),
                                   with_margin),
       ".*Sphere voxel SDF.*requires zero margin.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(cylinder, GeometryId::get_new_id(),
+                                  with_margin),
+      ".*Cylinder voxel SDF.*requires zero margin.*");
 }
 
 void DoTestVanished(const Shape& shape, bool expect_vanished) {
