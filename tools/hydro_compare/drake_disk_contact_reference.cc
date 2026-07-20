@@ -235,9 +235,9 @@ Args ParseArgs(int argc, char* argv[]) {
     throw std::runtime_error("--time-step must be positive.");
   }
   if (args.contact_approximation != "tamsi" &&
-      args.contact_approximation != "sap") {
+      args.contact_approximation != "lagged") {
     throw std::runtime_error(
-        "--contact-approximation must be one of tamsi or sap.");
+        "--contact-approximation must be one of tamsi or lagged.");
   }
   return args;
 }

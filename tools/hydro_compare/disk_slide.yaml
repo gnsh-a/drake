@@ -5,8 +5,7 @@
 # No initial spin: friction should decelerate the disk at mu*g until it
 # stops, with negligible spin-down torque.
 #
-# Solver convention: use SAP for this separated slide-only solver-stats case.
-# Use TAMSI for the combined slide+spin analytic comparison.
+# Solver options: tamsi (default) or SAP (lagged); both give friction = mu*N.
 disk:
   radius: 0.01213                        # m
   thickness: 0.00175                     # m
@@ -27,7 +26,6 @@ box:
 
 material:
   friction: 0.2
-  relaxation_time: 1.0e-3
 
 mesh:
   sdf_target_voxel_size: 0.0025  # m

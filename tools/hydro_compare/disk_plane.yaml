@@ -5,9 +5,9 @@
 # given an initial slide + spin and decays under friction toward the
 # universal terminal slip/spin ratio eps* ~ 0.653.
 #
-# Solver convention: use TAMSI for this combined slide+spin analytic
-# comparison. Use SAP for the separated slide-only and spin-only solver-stats
-# cases.
+# Solver options: tamsi (default) or SAP (lagged); both reproduce the analytic
+# result cleanly. Plain SAP is intentionally not offered -- in this pinned
+# setup it spuriously couples sliding into the normal load.
 disk:
   radius: 0.01213                        # m
   thickness: 0.00175                     # m
@@ -15,8 +15,8 @@ disk:
   density: 7010.0                        # kg/m^3
   # The disk is constrained to the plane by a PlanarJoint (x, y, yaw free;
   # z/roll/pitch locked). z0 = 0.010874868 was bisected to give a static
-  # normal force N == mg at E=1.0e7. TAMSI is the default for this disk demo;
-  # SAP can be selected for comparison but changes the normal load behavior.
+  # normal force N == mg at E=1.0e7. TAMSI is the default; SAP (lagged) gives
+  # the same clean normal load.
   initial_position: [0.0, 0.0, 0.010874868]  # m, world (locked disk-origin z)
   initial_linear_velocity: [0.2, 0.0, 0.0]    # m/s, slide in +x
   initial_angular_velocity: [0.0, 0.0, 12.0]  # rad/s, spin about z (eps0 ~ 1.37)
@@ -27,7 +27,6 @@ box:
 
 material:
   friction: 0.2
-  relaxation_time: 1.0e-4
 
 mesh:
   sdf_target_voxel_size: 0.0025  # m
