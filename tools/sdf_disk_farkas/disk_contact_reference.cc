@@ -437,9 +437,8 @@ void WriteSapStats(const std::vector<SapStatRow>& rows,
   for (const SapStatRow& row : rows) {
     out << row.time << "," << row.num_hydro_contacts << "," << row.num_iters
         << "," << row.num_line_search_iters << ","
-        << (row.optimality_reached ? 1 : 0) << ","
-        << (row.cost_reached ? 1 : 0) << ","
-        << row.final_momentum_residual << "\n";
+        << (row.optimality_reached ? 1 : 0) << "," << (row.cost_reached ? 1 : 0)
+        << "," << row.final_momentum_residual << "\n";
   }
 }
 
@@ -643,9 +642,8 @@ int DoMain(int argc, char* argv[]) {
       row.num_line_search_iters = sap->num_line_search_iters;
       row.optimality_reached = sap->optimality_criterion_reached;
       row.cost_reached = sap->cost_criterion_reached;
-      row.final_momentum_residual = sap->momentum_residual.empty()
-                                        ? 0.0
-                                        : sap->momentum_residual.back();
+      row.final_momentum_residual =
+          sap->momentum_residual.empty() ? 0.0 : sap->momentum_residual.back();
       sap_stats.push_back(row);
     }
 
