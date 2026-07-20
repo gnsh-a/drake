@@ -7,7 +7,6 @@ filegroup(
     name = "report_tools",
     srcs = [
         "README.md",
-        "generate_report.py",
         "run_comparison.py",
         "view_surface.py",
     ],
