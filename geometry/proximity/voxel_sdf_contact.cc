@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <span>
 #include <tuple>
@@ -231,6 +232,118 @@ bool CellOwnsBoundaryPolygon(const VoxelSdfGeometry& A, int i, int j, int k,
   return true;
 }
 
+bool LiesOnCellBoundary(const Vector3d& center_A, double voxel_width,
+                        std::span<const Vector3d> vertices_A,
+                        double spatial_tolerance) {
+  // Crossing a cell boundary is ordinary and needs no special ownership. Only
+  // flag a polygon when every vertex lies on the same face of the host cell;
+  // such a polygon can be emitted in full by the cell across that face.
+  const double voxel_radius = 0.5 * voxel_width;
+  for (int axis = 0; axis < 3; ++axis) {
+    for (const double sign : {-1.0, 1.0}) {
+      const double boundary = center_A[axis] + sign * voxel_radius;
+      const bool lies_on_boundary = std::all_of(
+          vertices_A.begin(), vertices_A.end(),
+          [axis, boundary, spatial_tolerance](const Vector3d& vertex_A) {
+            return std::abs(vertex_A[axis] - boundary) <= spatial_tolerance;
+          });
+      if (lies_on_boundary) return true;
+    }
+  }
+  return false;
+}
+
+bool NearlyEqual(double a, double b) {
+  // Pressure and gradient data can differ by a few ulps when the same field is
+  // evaluated from opposite sides of an interpolation-cell boundary. Scale the
+  // comparison by the data rather than reusing the length-valued tolerance.
+  const double tolerance =
+      kToleranceScale * std::numeric_limits<double>::epsilon() *
+      std::max({1.0, std::abs(a), std::abs(b)});
+  return std::abs(a - b) <= tolerance;
+}
+
+bool NearlyEqual(const Vector3d& a, const Vector3d& b) {
+  const double tolerance =
+      kToleranceScale * std::numeric_limits<double>::epsilon() *
+      std::max({1.0, a.norm(), b.norm()});
+  return (a - b).norm() <= tolerance;
+}
+
+bool AreEquivalentBoundaryPolygons(const VoxelSdfContactPolygon& a,
+                                   const VoxelSdfContactPolygon& b,
+                                   double spatial_tolerance) {
+  // Geometric coincidence alone is insufficient: two local sampled fields can
+  // place polygons on the same host-cell face while assigning them different
+  // pressure data. Treat polygons as duplicate copies only when their geometry
+  // and all data stored on ContactSurface agree. Vertex order is deliberately
+  // ignored because independently clipped copies need not choose the same
+  // starting vertex.
+  if (a.vertices_A.size() != b.vertices_A.size() ||
+      a.pressures.size() != b.pressures.size() ||
+      a.vertices_A.size() != a.pressures.size()) {
+    return false;
+  }
+  if ((CalcCentroid(a.vertices_A) - CalcCentroid(b.vertices_A)).norm() >
+          spatial_tolerance ||
+      !NearlyEqual(a.nhat_BA_A, b.nhat_BA_A) ||
+      !NearlyEqual(a.grad_p_A, b.grad_p_A) ||
+      !NearlyEqual(a.grad_p_B_A, b.grad_p_B_A)) {
+    return false;
+  }
+
+  std::vector<bool> matched_b(b.vertices_A.size(), false);
+  for (int va = 0; va < static_cast<int>(a.vertices_A.size()); ++va) {
+    bool matched = false;
+    for (int vb = 0; vb < static_cast<int>(b.vertices_A.size()); ++vb) {
+      if (matched_b[vb]) continue;
+      if ((a.vertices_A[va] - b.vertices_A[vb]).norm() <= spatial_tolerance &&
+          NearlyEqual(a.pressures[va], b.pressures[vb])) {
+        matched_b[vb] = true;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) return false;
+  }
+  return true;
+}
+
+using CellIndex = std::tuple<int, int, int>;
+// Only boundary-contained polygons are retained here. The map is indexed by
+// the host cell that supplied the accepted copy, not by a quantized world-space
+// position, so duplicate detection does not introduce another geometric
+// tolerance or depend on the pose X_WA.
+using BoundaryPolygonMap =
+    std::map<CellIndex, std::vector<VoxelSdfContactPolygon>>;
+
+bool HasEquivalentBoundaryPolygon(const VoxelSdfContactPolygon& polygon,
+                                  int i, int j, int k,
+                                  double spatial_tolerance,
+                                  const BoundaryPolygonMap& accepted) {
+  // Two nonzero-area polygons clipped to different host voxels can be
+  // coincident only if those closed cubes touch: they must come from the same
+  // cell or one of its 26 face-, edge-, or vertex-neighbors. The k-j-i
+  // traversal makes one of those copies arrive first; retaining that accepted
+  // copy gives deterministic ownership without assuming that a non-invariant
+  // field also produced a copy in any particular lower-index neighbor.
+  for (int dk = -1; dk <= 1; ++dk) {
+    for (int dj = -1; dj <= 1; ++dj) {
+      for (int di = -1; di <= 1; ++di) {
+        const auto iter = accepted.find(CellIndex{i + di, j + dj, k + dk});
+        if (iter == accepted.end()) continue;
+        for (const VoxelSdfContactPolygon& candidate : iter->second) {
+          if (AreEquivalentBoundaryPolygons(polygon, candidate,
+                                            spatial_tolerance)) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
 std::optional<VoxelSdfContactPolygon> DoCalcVoxelSdfContactPolygon(
     const Vector3d& center_A, double voxel_width, const AffineSdfField& sdf_A,
     const AffineSdfField& sdf_B_A,
@@ -405,6 +518,11 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
   PolyMeshBuilder<double> builder_A;
   std::vector<Vector3d> grad_p_A_A_per_face;
   std::vector<Vector3d> grad_p_B_A_per_face;
+  // Cell-invariant primitive branches use CellOwnsBoundaryPolygon() below,
+  // which can assign ownership without inspecting the neighboring cell.
+  // Sampled affine branches lack that guarantee, so remember accepted boundary
+  // polygons and suppress only a subsequently confirmed equivalent copy.
+  BoundaryPolygonMap accepted_boundary_polygons;
 
   for (int k = 0; k < A.cell_counts()[2]; ++k) {
     for (int j = 0; j < A.cell_counts()[1]; ++j) {
@@ -504,6 +622,20 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
 
             DRAKE_DEMAND(polygon->vertices_A.size() ==
                          polygon->pressures.size());
+            const bool lies_on_cell_boundary = LiesOnCellBoundary(
+                center_A, A.voxel_width(), polygon->vertices_A,
+                spatial_tolerance);
+            // Sampled affine fields are local linearizations and can change
+            // across cells. Therefore, unlike the cell-invariant path above, a
+            // polygon on this cell's lower boundary cannot simply be discarded
+            // on the assumption that its neighbor emitted the same polygon.
+            // Suppress only a copy confirmed against an already accepted cell.
+            if (lies_on_cell_boundary &&
+                HasEquivalentBoundaryPolygon(*polygon, i, j, k,
+                                             spatial_tolerance,
+                                             accepted_boundary_polygons)) {
+              continue;
+            }
             std::vector<int> vertex_indices;
             vertex_indices.reserve(polygon->vertices_A.size());
             for (int v = 0; v < static_cast<int>(polygon->vertices_A.size());
@@ -521,6 +653,10 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
             DRAKE_DEMAND(faces_added == 1);
             grad_p_A_A_per_face.push_back(polygon->grad_p_A);
             grad_p_B_A_per_face.push_back(polygon->grad_p_B_A);
+            if (lies_on_cell_boundary) {
+              accepted_boundary_polygons[CellIndex{i, j, k}].push_back(
+                  *polygon);
+            }
           }
         }
       }

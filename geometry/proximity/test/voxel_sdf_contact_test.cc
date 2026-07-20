@@ -626,6 +626,27 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SharedVoxelBoundaryHasSingleOwner) {
   ExpectNoCoincidentFaces(*surface);
 }
 
+GTEST_TEST(VoxelSdfContactSurfaceTest,
+           SampledSharedVoxelBoundaryHasSingleOwner) {
+  constexpr double voxel_width = 0.25;
+  const VoxelSdfGeometry A(Box::MakeCube(2.0), voxel_width, 100.0,
+                           VoxelSdfEvaluationMode::kSampledTrilinear);
+  const VoxelSdfGeometry B(Box::MakeCube(2.0), voxel_width, 100.0,
+                           VoxelSdfEvaluationMode::kSampledTrilinear);
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+  // Equal moduli put the x-normal equal-pressure patch on x = 0.75, an A-grid
+  // boundary. Before confirmed boundary-polygon suppression, the two adjacent
+  // cells emitted nine pairs of coincident faces. Sampled affine branches are
+  // not cell-invariant, so the implementation must compare the neighboring
+  // results instead of unconditionally assigning the face to one cell.
+  const RigidTransformd X_WB(Vector3d(1.5, 0.125, 0.125));
+  const auto surface =
+      CalcVoxelSdfCompliantContact(A, RigidTransformd(), id_A, B, X_WB, id_B);
+  ASSERT_NE(surface, nullptr);
+  ExpectSurfaceInvariants(*surface, id_A, id_B);
+  ExpectNoCoincidentFaces(*surface);
+}
+
 GTEST_TEST(VoxelSdfContactSurfaceTest, FaceOverlapDepthsAndMultipleVoxels) {
   const VoxelSdfGeometry A(Box(2.0, 2.0, 2.0), 0.5, 100.0);
   const VoxelSdfGeometry B(Box(2.0, 2.0, 2.0), 0.5, 100.0);
