@@ -1,0 +1,33 @@
+# Sliding + spinning disk-on-plane hydroelastic scene for the Drake disk
+# contact reference runner. Reproduces the quarter-coin puck from Masterjohn
+# et al., "Velocity Level Approximation of Pressure Field Contact
+# Patches" (RA-L 2022, arXiv:2110.04157), Sec. V-A: a thin compliant disk is
+# given an initial slide + spin and decays under friction toward the
+# universal terminal slip/spin ratio eps* ~ 0.653.
+#
+# Solver options: tamsi (default) or SAP (lagged); both reproduce the analytic
+# result cleanly. Plain SAP is intentionally not offered -- in this pinned
+# setup it spuriously couples sliding into the normal load.
+disk:
+  radius: 0.01213                        # m
+  thickness: 0.00175                     # m
+  hydroelastic_modulus: 1.0e7            # Pa (soft enough for a stable patch)
+  density: 7010.0                        # kg/m^3
+  # The disk is constrained to the plane by a PlanarJoint (x, y, yaw free;
+  # z/roll/pitch locked). z0 = 0.010874868 was bisected to give a static
+  # normal force N == mg at E=1.0e7. TAMSI is the default; SAP (lagged) gives
+  # the same clean normal load.
+  initial_position: [0.0, 0.0, 0.010874868]  # m, world (locked disk-origin z)
+  initial_linear_velocity: [0.2, 0.0, 0.0]    # m/s, slide in +x
+  # Spin about z in rad/s; together with the slide speed, eps0 is about 1.37.
+  initial_angular_velocity: [0.0, 0.0, 12.0]
+
+box:
+  full_size: [0.2, 0.2, 0.02]   # m   half sizes = full / 2
+  hydroelastic_modulus: 1.0e7   # Pa
+
+material:
+  friction: 0.2
+
+mesh:
+  sdf_target_voxel_size: 0.0025  # m
