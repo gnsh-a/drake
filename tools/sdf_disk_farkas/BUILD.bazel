@@ -3,6 +3,16 @@ load("//tools/skylark:drake_cc.bzl", "drake_cc_binary")
 
 package(default_visibility = ["//visibility:private"])
 
+filegroup(
+    name = "report_tools",
+    srcs = [
+        "README.md",
+        "generate_report.py",
+        "run_comparison.py",
+        "view_surface.py",
+    ],
+)
+
 drake_cc_binary(
     name = "disk_contact_reference",
     srcs = ["disk_contact_reference.cc"],
