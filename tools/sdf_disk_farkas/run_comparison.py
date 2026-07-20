@@ -1,9 +1,13 @@
-"""Runs tet and affine-SDF disk simulations and regenerates the HTML report."""
+"""Runs the tet and affine-SDF disk simulation sweep and writes CSV output.
+
+Each case writes a trajectory CSV plus companion <stem>_sap_stats.csv and
+<stem>_tamsi_stats.csv solver-statistics files. Analyze the CSVs directly; no
+report is generated.
+"""
 
 import argparse
 from pathlib import Path
 import subprocess
-import sys
 
 _DEFAULT_VOXEL_SIZES = (0.0025, 0.00125, 0.000625)
 
@@ -27,11 +31,6 @@ def _parse_args():
     )
     parser.add_argument(
         "--contact-approximation", choices=("tamsi", "lagged"), default="lagged"
-    )
-    parser.add_argument(
-        "--skip-simulation",
-        action="store_true",
-        help="regenerate the report from existing CSV files",
     )
     args = parser.parse_args()
     if args.time_step <= 0.0:
@@ -123,88 +122,44 @@ def main():
     root = _repo_root()
     output_dir = _absolute(args.output_dir, root)
     # Deliberately do not clear this directory; it may contain other local
-    # experiment artifacts that must survive report regeneration.
+    # experiment artifacts that must survive a rerun.
     output_dir.mkdir(parents=True, exist_ok=True)
     coarse_size = args.voxel_sizes[0]
     fine_size = args.voxel_sizes[-1]
-    tet_csv = output_dir / (
-        _case_stem(args, "tet", coarse_size, args.time_step) + ".csv"
-    )
-    voxel_runs = [
-        (
-            voxel_size,
-            args.time_step,
-            output_dir
-            / (
-                _case_stem(args, "voxel_sdf", voxel_size, args.time_step)
-                + ".csv"
-            ),
+
+    binary = _build_runner(root)
+    written = [
+        _run_case(
+            args, root, output_dir, binary, "tet", coarse_size, args.time_step
         )
-        for voxel_size in args.voxel_sizes
     ]
-    voxel_runs.append(
-        (
-            fine_size,
-            args.time_step / 2.0,
-            output_dir
-            / (
-                _case_stem(
-                    args,
-                    "voxel_sdf",
-                    fine_size,
-                    args.time_step / 2.0,
-                )
-                + ".csv"
-            ),
+    for voxel_size in args.voxel_sizes:
+        written.append(
+            _run_case(
+                args,
+                root,
+                output_dir,
+                binary,
+                "voxel_sdf",
+                voxel_size,
+                args.time_step,
+            )
         )
-    )
-    if not args.skip_simulation:
-        binary = _build_runner(root)
-        tet_csv = _run_case(
+    written.append(
+        _run_case(
             args,
             root,
             output_dir,
             binary,
-            "tet",
-            coarse_size,
-            args.time_step,
+            "voxel_sdf",
+            fine_size,
+            args.time_step / 2.0,
         )
-        voxel_runs = [
-            (
-                voxel_size,
-                time_step,
-                _run_case(
-                    args,
-                    root,
-                    output_dir,
-                    binary,
-                    "voxel_sdf",
-                    voxel_size,
-                    time_step,
-                ),
-            )
-            for voxel_size, time_step, _ in voxel_runs
-        ]
+    )
 
-    report_path = output_dir / "disk_farkas_affine_sdf.html"
-    report_command = [
-        sys.executable,
-        str(root / "tools/sdf_disk_farkas/generate_report.py"),
-        "--tet-csv",
-        str(tet_csv),
-        "--tet-target-voxel-size",
-        str(coarse_size),
-        "--tet-time-step",
-        str(args.time_step),
-        "--output",
-        str(report_path),
-    ]
-    for voxel_size, time_step, csv_path in voxel_runs:
-        report_command.extend(
-            ["--voxel-run", f"{voxel_size},{time_step},{csv_path}"]
-        )
-    subprocess.run(report_command, cwd=root, check=True)
-    print(f"Report: {report_path}")
+    print(f"Wrote {len(written)} trajectory CSVs to {output_dir}:")
+    for csv_path in written:
+        print(f"  {csv_path.name} (+ _sap_stats.csv, _tamsi_stats.csv)")
     surface_name = _case_stem(args, "voxel_sdf", fine_size, args.time_step)
     print(
         "Surface viewer: uv run --with pyvista python "
