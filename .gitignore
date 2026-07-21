@@ -30,3 +30,4 @@
 
 # User-specified configuration
 /user.bazelrc
+/tools/hydro_compare/out/*
