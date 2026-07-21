@@ -15,6 +15,11 @@ import statistics
 _EPS_CONTINUUM = 0.653
 _EPS_DISCRETE = 0.644
 _OMEGA_TERMINAL_CUTOFF = 0.1
+_DISK_THICKNESS_MM = 1.75  # From disk_plane.yaml disk.thickness.
+# A grid or time-step point is flagged as an outlier when its terminal eps*
+# departs from the finest run's by more than this -- well above the ~0.002
+# spread among the well-behaved points.
+_EPS_OUTLIER_TOL = 0.02
 _DEFAULT_OUTPUT = (
     "tools/hydro_compare/out/sdf_disk_farkas/disk_farkas_affine_sdf.html"
 )
@@ -160,6 +165,13 @@ def _active_eps(rows):
         if row["angular_speed"] >= _OMEGA_TERMINAL_CUTOFF
         and math.isfinite(row["eps"])
     ]
+
+
+def _terminal_eps(rows):
+    active = _active_eps(rows)
+    if not active:
+        raise RuntimeError("No samples satisfy the terminal-epsilon cutoff")
+    return active[-1][1]
 
 
 def _rms_error(run_rows, ref_rows):
@@ -380,7 +392,8 @@ def _make_html(
         ),
     )
 
-    # Section 3: convergence, affine grid and time-step refinement.
+    # Section 3: convergence, affine grid and time-step refinement, plus how
+    # close the terminal eps* gets to the analytic continuum/discrete values.
     conv_grid_runs = sorted(
         conv_grid_runs, key=lambda item: item[0], reverse=True
     )
@@ -392,10 +405,32 @@ def _make_html(
     grid_order = _fit_order(
         [h for h, _, _ in grid_points], [e for _, e, _ in grid_points]
     )
+    grid_ref_h = conv_grid_runs[-1][0]
+    grid_eps = {h: _terminal_eps(_read_csv(path)) for h, path in conv_grid_runs}
+    grid_finest_eps = grid_eps[grid_ref_h]
+    # A point earns the outlier marker by eps*, not by a physical rule: the
+    # h=5mm point turns out to depart from the h<=2.5mm plateau by ~0.08,
+    # far past the ~0.002 spread among those other points.
+    grid_outlier_hs = [
+        h
+        for h, _ in conv_grid_runs
+        if abs(grid_eps[h] - grid_finest_eps) > _EPS_OUTLIER_TOL
+    ]
+
+    def _grid_h_label(h):
+        marker = "&nbsp;*" if h in grid_outlier_hs else ""
+        return f"{h * 1e3:g}{marker}"
+
     grid_table_rows = "".join(
-        f"<tr><td>{h * 1e3:g}</td><td>{_format(pos_err, 3)}</td>"
-        f"<td>{_format(yaw_err, 3)}</td></tr>"
-        for h, pos_err, yaw_err in grid_points
+        f"<tr><td>{_grid_h_label(h)}</td><td>{_format(pos_err, 3)}</td>"
+        f"<td>{_format(grid_eps[h], 4)}</td>"
+        f"<td>{_format(grid_eps[h] - _EPS_CONTINUUM, 3)}</td></tr>"
+        for h, pos_err, _ in grid_points
+    )
+    grid_table_rows += (
+        f"<tr><td>{_grid_h_label(grid_ref_h)} (ref)</td><td>&mdash;</td>"
+        f"<td>{_format(grid_finest_eps, 4)}</td>"
+        f"<td>{_format(grid_finest_eps - _EPS_CONTINUUM, 3)}</td></tr>"
     )
     grid_chart = _chart(
         [("relL2 pos", [(h, e) for h, e, _ in grid_points], "voxel-line")],
@@ -414,10 +449,18 @@ def _make_html(
     dt_order = _fit_order(
         [dt for dt, _, _ in dt_points], [e for _, e, _ in dt_points]
     )
+    dt_eps = {dt: _terminal_eps(_read_csv(path)) for dt, path in conv_dt_runs}
     dt_table_rows = "".join(
         f"<tr><td>{dt * 1e3:g}</td><td>{_format(pos_err, 3)}</td>"
-        f"<td>{_format(yaw_err, 3)}</td></tr>"
-        for dt, pos_err, yaw_err in dt_points
+        f"<td>{_format(dt_eps[dt], 4)}</td>"
+        f"<td>{_format(dt_eps[dt] - _EPS_CONTINUUM, 3)}</td></tr>"
+        for dt, pos_err, _ in dt_points
+    )
+    dt_table_rows += (
+        f"<tr><td>{conv_dt_runs[-1][0] * 1e3:g} (ref)</td><td>&mdash;</td>"
+        f"<td>{_format(dt_eps[conv_dt_runs[-1][0]], 4)}</td>"
+        f"<td>{_format(dt_eps[conv_dt_runs[-1][0]] - _EPS_CONTINUUM, 3)}"
+        "</td></tr>"
     )
     dt_chart = _chart(
         [("relL2 pos", [(dt, e) for dt, e, _ in dt_points], "voxel-line")],
@@ -425,6 +468,14 @@ def _make_html(
         "time step dt [s]",
         log_x=True,
         log_y=True,
+    )
+    dt_ref_dt = conv_dt_runs[-1][0]
+    dt_finest_eps = dt_eps[dt_ref_dt]
+    dt_finest_offset = dt_finest_eps - _EPS_CONTINUUM
+    grid_outlier_note = (
+        f" (h={max(grid_outlier_hs) * 1e3:g}&nbsp;mm, marked *)"
+        if grid_outlier_hs
+        else ""
     )
 
     return f"""<!doctype html>
@@ -501,7 +552,9 @@ per step as tet; every step converges for both.</li>
 <li><b>Trajectory tracks tet closely.</b> Affine-SDF position/yaw error vs
 the tet control shrinks as the grid refines.</li>
 <li><b>Convergence is clean.</b> Affine-SDF is roughly order
-{grid_order:.1f} in grid size and order {dt_order:.1f} in time step.</li>
+{grid_order:.1f} in grid size and order {dt_order:.1f} in time step; eps*
+settles to {dt_finest_eps:.3f} ({dt_finest_offset:+.3f} vs the analytic
+continuum 0.653) under time-step refinement.</li>
 </ul></div>
 
 <h2>1&nbsp; SAP iterations</h2>
@@ -532,19 +585,30 @@ dt={tet_dt * 1e3:g}&nbsp;ms.</p>
 ill-conditioned once the disk nearly stops.</p>
 
 <h2>3&nbsp; Convergence (affine-SDF)</h2>
-<p class="note">Relative L2 pose error vs the finest run in each sweep.</p>
+<p class="note">relL2 pos is the position error vs the finest run in each
+sweep; eps* is the terminal slip/spin ratio and eps*&nbsp;&minus;&nbsp;0.653
+its distance from the analytic continuum value (the analytic discrete
+correction is 0.644).</p>
 <div class="grid2">
 <div><table><thead><tr><th>grid h [mm]</th><th>relL2 pos</th>
-<th>relL2 yaw</th></tr></thead>
+<th>eps*</th><th>eps*&minus;0.653</th></tr></thead>
 <tbody>{grid_table_rows}</tbody></table>{grid_chart}
 <p class="note">Fitted order: <b>{grid_order:.2f}</b> (grid
 refinement).</p></div>
 <div><table><thead><tr><th>dt [ms]</th><th>relL2 pos</th>
-<th>relL2 yaw</th></tr></thead>
+<th>eps*</th><th>eps*&minus;0.653</th></tr></thead>
 <tbody>{dt_table_rows}</tbody></table>{dt_chart}
 <p class="note">Fitted order: <b>{dt_order:.2f}</b> (time-step
 refinement).</p></div>
 </div>
+<p class="note">Under time-step refinement eps* converges cleanly to
+{dt_finest_eps:.3f} ({dt_finest_offset:+.3f} vs the analytic continuum
+0.653; the analytic discrete correction is 0.644). Grid refinement plateaus
+near the same level{grid_outlier_note} &mdash; the disk's own
+{_DISK_THICKNESS_MM:g}&nbsp;mm thickness sets a lower bound on a
+usable grid. Neither refinement drives eps* onto the analytic value here;
+the residual offset is a systematic effect of this scene, not solver error
+(see &sect;1: every step converges).</p>
 </div>
 <script>
 (function(){{
