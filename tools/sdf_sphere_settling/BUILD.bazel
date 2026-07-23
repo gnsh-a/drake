@@ -1,0 +1,25 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_cc.bzl", "drake_cc_binary")
+
+package(default_visibility = ["//visibility:private"])
+
+drake_cc_binary(
+    name = "sphere_sphere_settling",
+    srcs = ["sphere_sphere_settling.cc"],
+    deps = [
+        "//geometry:proximity_properties",
+        "//geometry:scene_graph",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//multibody/math",
+        "//multibody/plant",
+        "//multibody/tree:spatial_inertia",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+        "//systems/framework:diagram_builder",
+        "@gflags",
+    ],
+)
+
+add_lint_tests()
