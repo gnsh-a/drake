@@ -33,6 +33,11 @@ class VoxelSdfGeometry {
   VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
                    double hydroelastic_modulus,
                    VoxelSdfEvaluationMode evaluation_mode);
+  VoxelSdfGeometry(const Ellipsoid& ellipsoid, double voxel_width,
+                   double hydroelastic_modulus);
+  VoxelSdfGeometry(const Ellipsoid& ellipsoid, double voxel_width,
+                   double hydroelastic_modulus,
+                   VoxelSdfEvaluationMode evaluation_mode);
   VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
                    double hydroelastic_modulus);
   VoxelSdfGeometry(const Sphere& sphere, double voxel_width,

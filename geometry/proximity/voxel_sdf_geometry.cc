@@ -85,6 +85,19 @@ VoxelSdfGeometry::VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
     : VoxelSdfGeometry(VoxelSdfShape(cylinder), voxel_width,
                        hydroelastic_modulus, evaluation_mode) {}
 
+VoxelSdfGeometry::VoxelSdfGeometry(const Ellipsoid& ellipsoid,
+                                   double voxel_width,
+                                   double hydroelastic_modulus)
+    : VoxelSdfGeometry(ellipsoid, voxel_width, hydroelastic_modulus,
+                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Ellipsoid& ellipsoid,
+                                   double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode)
+    : VoxelSdfGeometry(VoxelSdfShape(ellipsoid), voxel_width,
+                       hydroelastic_modulus, evaluation_mode) {}
+
 VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus,

@@ -288,6 +288,50 @@ GTEST_TEST(VoxelSdfGeometryTest, CylinderRejectsSampledTrilinear) {
       ".*Cylinder.*does not support sampled trilinear.*");
 }
 
+GTEST_TEST(VoxelSdfGeometryTest, EllipsoidGridAndCachedSamples) {
+  const Ellipsoid ellipsoid(1.5, 0.75, 1.25);
+  const VoxelSdfGeometry dut(ellipsoid, 0.5, 12.0);
+  EXPECT_EQ(dut.evaluation_mode(), VoxelSdfEvaluationMode::kPrimitiveAffine);
+  EXPECT_TRUE(CompareMatrices(dut.cell_counts(), Vector3<int>(6, 3, 5)));
+  EXPECT_TRUE(
+      CompareMatrices(dut.lower_cell_boundary(), Vector3d(-1.5, -0.75, -1.25)));
+  EXPECT_EQ(dut.characteristic_length(), 0.75);
+  EXPECT_EQ(dut.pressure_scale(), 16.0);
+
+  const fcl::Ellipsoidd fcl_ellipsoid(ellipsoid.a(), ellipsoid.b(),
+                                      ellipsoid.c());
+  for (const Vector3<int>& index :
+       {Vector3<int>(0, 0, 0), Vector3<int>(3, 1, 2), Vector3<int>(5, 2, 4)}) {
+    const Vector3d p_GQ = dut.cell_center(index.x(), index.y(), index.z());
+    point_distance::DistanceToPoint<double> query(
+        GeometryId::get_new_id(), math::RigidTransformd(), p_GQ);
+    const SignedDistanceToPoint<double> expected = query(fcl_ellipsoid);
+    const auto& actual = dut.sample(index.x(), index.y(), index.z());
+    EXPECT_EQ(actual.value, expected.distance);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
+  }
+
+  const auto branches = dut.CalcCellSdfBranches(3, 1, 2);
+  ASSERT_EQ(branches.size(), 1u);
+  EXPECT_EQ(branches[0].sample.value, dut.sample(3, 1, 2).value);
+  EXPECT_EQ(branches[0].sample.gradient, dut.sample(3, 1, 2).gradient);
+  EXPECT_TRUE(branches[0].active_region.empty());
+  EXPECT_EQ(branches[0].index, 0);
+  EXPECT_FALSE(branches[0].is_cell_invariant);
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, EllipsoidRejectsSampledTrilinear) {
+  const Ellipsoid ellipsoid(1.5, 0.75, 1.25);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(ellipsoid, 0.5, 10.0,
+                       VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*Ellipsoid.*does not support sampled trilinear.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(VoxelSdfShape(ellipsoid), 0.5, 10.0,
+                       VoxelSdfEvaluationMode::kSampledTrilinear),
+      ".*Ellipsoid.*does not support sampled trilinear.*");
+}
+
 GTEST_TEST(VoxelSdfGeometryTest, AffineBranchAccess) {
   const VoxelSdfGeometry sphere(Sphere(2.5), 1.0, 10.0);
   const auto sphere_branches = sphere.CalcCellSdfBranches(2, 2, 2);

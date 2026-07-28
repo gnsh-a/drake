@@ -1,5 +1,6 @@
 #include "drake/geometry/proximity/hydroelastic_calculator.h"
 
+#include <cmath>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -759,6 +760,74 @@ GTEST_TEST(ContactCalculatorTest, CylinderVoxelDispatch) {
   ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
   ASSERT_NE(reversed_surface, nullptr);
   ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *reversed_surface);
+}
+
+GTEST_TEST(ContactCalculatorTest, EllipsoidCylinderVoxelDispatch) {
+  for (const auto& [ellipsoid_width, cylinder_width] :
+       {std::pair{0.1, 0.2}, std::pair{0.2, 0.1}}) {
+    SCOPED_TRACE(fmt::format("ellipsoid_width = {}, cylinder_width = {}",
+                             ellipsoid_width, cylinder_width));
+    Geometries geometries;
+    unordered_map<GeometryId, RigidTransform<double>> X_WGs;
+
+    ProximityProperties ellipsoid_properties;
+    AddCompliantHydroelasticVoxelSdfProperties(ellipsoid_width, 100.0,
+                                               &ellipsoid_properties);
+    ProximityProperties cylinder_properties;
+    AddCompliantHydroelasticVoxelSdfProperties(cylinder_width, 100.0,
+                                               &cylinder_properties);
+    const GeometryId ellipsoid_id = GeometryId::get_new_id();
+    const GeometryId cylinder_id = GeometryId::get_new_id();
+    geometries.MaybeAddGeometry(Ellipsoid(0.8, 0.6, 1.0), ellipsoid_id,
+                                ellipsoid_properties);
+    geometries.MaybeAddGeometry(Cylinder(0.25, 1.6), cylinder_id,
+                                cylinder_properties);
+    X_WGs.emplace(ellipsoid_id, RigidTransform<double>());
+    X_WGs.emplace(cylinder_id,
+                  RigidTransform<double>(Vector3d(0.85, 0.0, 0.0)));
+
+    const VoxelSdfGeometry& ellipsoid =
+        geometries.compliant_geometry(ellipsoid_id).voxel_sdf();
+    const VoxelSdfGeometry& cylinder =
+        geometries.compliant_geometry(cylinder_id).voxel_sdf();
+    std::unique_ptr<ContactSurface<double>> direct;
+    if (ellipsoid_width < cylinder_width) {
+      direct = CalcVoxelSdfCompliantContact(ellipsoid, X_WGs.at(ellipsoid_id),
+                                            ellipsoid_id, cylinder,
+                                            X_WGs.at(cylinder_id), cylinder_id);
+    } else {
+      direct = CalcVoxelSdfCompliantContact(
+          cylinder, X_WGs.at(cylinder_id), cylinder_id, ellipsoid,
+          X_WGs.at(ellipsoid_id), ellipsoid_id);
+    }
+    ASSERT_NE(direct, nullptr);
+
+    ContactCalculator<double> calculator(
+        &X_WGs, &geometries, HydroelasticContactRepresentation::kPolygon);
+    auto [result, surface] =
+        calculator.MaybeMakeContactSurface(ellipsoid_id, cylinder_id);
+    ASSERT_EQ(result, ContactSurfaceResult::kCalculated);
+    ASSERT_NE(surface, nullptr);
+    ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface, *direct);
+    EXPECT_GT(surface->num_faces(), 0);
+    for (int v = 0; v < surface->num_vertices(); ++v) {
+      EXPECT_TRUE(surface->poly_mesh_W().vertex(v).allFinite());
+      EXPECT_TRUE(std::isfinite(surface->poly_e_MN().EvaluateAtVertex(v)));
+    }
+    for (int f = 0; f < surface->num_faces(); ++f) {
+      ASSERT_TRUE(surface->HasGradE_M());
+      ASSERT_TRUE(surface->HasGradE_N());
+      EXPECT_TRUE(surface->EvaluateGradE_M_W(f).allFinite());
+      EXPECT_TRUE(surface->EvaluateGradE_N_W(f).allFinite());
+    }
+
+    auto [reversed_result, reversed_surface] =
+        calculator.MaybeMakeContactSurface(cylinder_id, ellipsoid_id);
+    ASSERT_EQ(reversed_result, ContactSurfaceResult::kCalculated);
+    ASSERT_NE(reversed_surface, nullptr);
+    ExpectVoxelSurfacesEqualIncludingIdsAndGradients(*surface,
+                                                     *reversed_surface);
+  }
 }
 
 GTEST_TEST(ContactCalculatorTest, SampledVoxelPairOrderUsesFinerGrid) {

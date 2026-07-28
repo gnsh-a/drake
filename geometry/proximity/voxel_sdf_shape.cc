@@ -1,5 +1,6 @@
 #include "drake/geometry/proximity/voxel_sdf_shape.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <tuple>
@@ -18,6 +19,10 @@ VoxelSdfShape::VoxelSdfShape(const Box& box)
 
 VoxelSdfShape::VoxelSdfShape(const Cylinder& cylinder)
     : data_(CylinderData{cylinder.radius(), cylinder.length() / 2.0}) {}
+
+VoxelSdfShape::VoxelSdfShape(const Ellipsoid& ellipsoid)
+    : data_(EllipsoidData{
+          Vector3<double>(ellipsoid.a(), ellipsoid.b(), ellipsoid.c())}) {}
 
 VoxelSdfShape::VoxelSdfShape(const Sphere& sphere)
     : data_(SphereData{sphere.radius()}) {}
@@ -88,7 +93,7 @@ bool VoxelSdfShape::supports_sampled_trilinear() const {
 }
 
 std::string_view VoxelSdfShape::supported_shape_names() {
-  return "Box, Cylinder, and Sphere";
+  return "Box, Cylinder, Ellipsoid, and Sphere";
 }
 
 VoxelSdfShape::Sample VoxelSdfShape::DoEvaluate(const BoxData& box,
@@ -239,6 +244,49 @@ bool VoxelSdfShape::DoSupportsSampledTrilinear(const CylinderData&) {
   // Cylinder's cap, wall, and rim ownership is intentionally represented by
   // explicit affine branches; sampled trilinear evaluation would erase that
   // feature structure on the coarse grids this representation targets.
+  return false;
+}
+
+VoxelSdfShape::Sample VoxelSdfShape::DoEvaluate(const EllipsoidData& ellipsoid,
+                                                const Vector3<double>& p_GQ) {
+  // Reuse SceneGraph's point-distance implementation so voxel SDF and
+  // proximity queries share the same signed-distance and medial-axis
+  // conventions.
+  const fcl::Ellipsoidd fcl_ellipsoid(ellipsoid.radii.x(), ellipsoid.radii.y(),
+                                      ellipsoid.radii.z());
+  static const GeometryId unused_id = GeometryId::get_new_id();
+  point_distance::DistanceToPoint<double> query(
+      unused_id, math::RigidTransformd::Identity(), p_GQ);
+  const SignedDistanceToPoint<double> result = query(fcl_ellipsoid);
+  return Sample{result.distance, result.grad_W};
+}
+
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::DoCalcAffineBranches(
+    const EllipsoidData& ellipsoid, const Vector3<double>& p_GQ) {
+  return DoCalcAffineBranches(ellipsoid, p_GQ, DoEvaluate(ellipsoid, p_GQ));
+}
+
+std::vector<VoxelSdfShape::AffineBranch> VoxelSdfShape::DoCalcAffineBranches(
+    const EllipsoidData&, const Vector3<double>&,
+    const VoxelSdfShape::Sample& single_branch_sample) {
+  return {AffineBranch{single_branch_sample, {}, 0, false}};
+}
+
+Vector3<double> VoxelSdfShape::DoCalcBoundingBoxHalfWidths(
+    const EllipsoidData& ellipsoid) {
+  return ellipsoid.radii;
+}
+
+double VoxelSdfShape::DoCalcCharacteristicLength(
+    const EllipsoidData& ellipsoid) {
+  return ellipsoid.radii.minCoeff();
+}
+
+std::string_view VoxelSdfShape::DoGetShapeName(const EllipsoidData&) {
+  return "Ellipsoid";
+}
+
+bool VoxelSdfShape::DoSupportsSampledTrilinear(const EllipsoidData&) {
   return false;
 }
 
