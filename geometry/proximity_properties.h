@@ -175,11 +175,11 @@ void AddCompliantHydroelasticProperties(double resolution_hint,
                                         double hydroelastic_modulus,
                                         ProximityProperties* properties);
 
-/** Adds properties that opt a Box, Cylinder, or Sphere into the voxel
- signed-distance-field compliant hydroelastic representation.
+/** Adds properties that opt a Box, Cylinder, Ellipsoid, or Sphere into the
+ voxel signed-distance-field compliant hydroelastic representation.
 
- Cylinder uses primitive-affine evaluation; sampled trilinear evaluation is
- currently supported only for Box and Sphere.
+ Cylinder and Ellipsoid use primitive-affine evaluation; sampled trilinear
+ evaluation is currently supported only for Box and Sphere.
 
  @param voxel_width          The width of each cubic voxel, in meters.
  @param hydroelastic_modulus A multiplier that maps penetration to pressure.
@@ -192,13 +192,13 @@ void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     ProximityProperties* properties);
 
-/** Adds properties that opt a Box, Cylinder, or Sphere into the voxel
- signed-distance-field compliant hydroelastic representation with the selected
- evaluation mode.
+/** Adds properties that opt a Box, Cylinder, Ellipsoid, or Sphere into the
+ voxel signed-distance-field compliant hydroelastic representation with the
+ selected evaluation mode.
 
- Cylinder currently supports only VoxelSdfEvaluationMode::kPrimitiveAffine;
- selecting sampled trilinear evaluation for a Cylinder throws during geometry
- registration.
+ Cylinder and Ellipsoid currently support only
+ VoxelSdfEvaluationMode::kPrimitiveAffine; selecting sampled trilinear
+ evaluation for either shape throws during geometry registration.
 
  @param voxel_width          The width of each cubic voxel, in meters.
  @param hydroelastic_modulus A multiplier that maps penetration to pressure.
@@ -209,8 +209,8 @@ void AddCompliantHydroelasticVoxelSdfProperties(
                              `properties` already has a property this function
                              would add.
  @note Geometry registration throws if `mode` is unsupported for the
-       associated shape; currently, Cylinder does not support sampled
-       trilinear evaluation.
+       associated shape; currently, Cylinder and Ellipsoid do not support
+       sampled trilinear evaluation.
  @pre `properties` is not nullptr. */
 void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,

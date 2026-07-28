@@ -1,6 +1,7 @@
 #include "drake/geometry/proximity/voxel_sdf_shape.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <type_traits>
 #include <utility>
@@ -24,6 +25,7 @@ using Eigen::Vector3d;
 
 static_assert(std::is_constructible_v<VoxelSdfShape, const Box&>);
 static_assert(std::is_constructible_v<VoxelSdfShape, const Cylinder&>);
+static_assert(std::is_constructible_v<VoxelSdfShape, const Ellipsoid&>);
 static_assert(std::is_constructible_v<VoxelSdfShape, const Sphere&>);
 
 GTEST_TEST(VoxelSdfShapeTest, BoxEvaluationAndGeometryData) {
@@ -74,6 +76,55 @@ GTEST_TEST(VoxelSdfShapeTest, CylinderEvaluationAndGeometryData) {
     EXPECT_EQ(actual.value, expected.distance);
     EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
   }
+}
+
+GTEST_TEST(VoxelSdfShapeTest, EllipsoidEvaluationAndGeometryData) {
+  const Ellipsoid ellipsoid(1.5, 0.75, 1.25);
+  const VoxelSdfShape dut(ellipsoid);
+  EXPECT_EQ(dut.shape_name(), "Ellipsoid");
+  EXPECT_TRUE(CompareMatrices(dut.bounding_box_half_widths(),
+                              Vector3d(1.5, 0.75, 1.25)));
+  EXPECT_EQ(dut.characteristic_length(), 0.75);
+  EXPECT_FALSE(dut.supports_sampled_trilinear());
+
+  // VoxelSdfShape deliberately shares SceneGraph's FCL-backed Ellipsoid
+  // distance implementation and its medial-axis conventions.
+  const fcl::Ellipsoidd fcl_ellipsoid(ellipsoid.a(), ellipsoid.b(),
+                                      ellipsoid.c());
+  for (const Vector3d& p_GQ :
+       {Vector3d(0.0, 0.0, 0.0), Vector3d(1.0, 0.0, 0.0),
+        Vector3d(0.0, 0.5, 0.0), Vector3d(0.0, 0.0, 1.25),
+        Vector3d(2.0, 1.0, 0.5)}) {
+    const VoxelSdfShape::Sample actual = dut.Evaluate(p_GQ);
+    point_distance::DistanceToPoint<double> query(
+        GeometryId::get_new_id(), math::RigidTransformd(), p_GQ);
+    const SignedDistanceToPoint<double> expected = query(fcl_ellipsoid);
+    EXPECT_EQ(actual.value, expected.distance);
+    EXPECT_TRUE(CompareMatrices(actual.gradient, expected.grad_W));
+  }
+
+  // Exercise accuracy near a non-axis point on the surface. The tolerances
+  // match the existing point-to-Ellipsoid characterization of FCL's GJK/EPA
+  // implementation.
+  constexpr double kDistTolerance = 5e-5;
+  constexpr double kVectorTolerance = 5e-4;
+  const double root_three = std::sqrt(3.0);
+  const Vector3d p_GN(ellipsoid.a() / root_three, ellipsoid.b() / root_three,
+                      ellipsoid.c() / root_three);
+  const Vector3d normal = Vector3d(p_GN.x() / (ellipsoid.a() * ellipsoid.a()),
+                                   p_GN.y() / (ellipsoid.b() * ellipsoid.b()),
+                                   p_GN.z() / (ellipsoid.c() * ellipsoid.c()))
+                              .normalized();
+  for (const double distance : {-0.125, 0.0, 0.2}) {
+    const VoxelSdfShape::Sample sample = dut.Evaluate(p_GN + distance * normal);
+    EXPECT_NEAR(sample.value, distance, kDistTolerance);
+    EXPECT_TRUE(CompareMatrices(sample.gradient, normal, kVectorTolerance));
+  }
+
+  const VoxelSdfShape::Sample center = dut.Evaluate(Vector3d::Zero());
+  EXPECT_NEAR(center.value, -ellipsoid.b(), kDistTolerance);
+  EXPECT_TRUE(CompareMatrices(center.gradient.cwiseAbs(), Vector3d::UnitY(),
+                              kVectorTolerance));
 }
 
 GTEST_TEST(VoxelSdfShapeTest, SphereEvaluationAndGeometryData) {
@@ -194,6 +245,25 @@ GTEST_TEST(VoxelSdfShapeTest, SphereHasOneAffineBranch) {
   EXPECT_EQ(branches[0].sample.value, dut.Evaluate(p_GQ).value);
   EXPECT_TRUE(CompareMatrices(branches[0].sample.gradient,
                               dut.Evaluate(p_GQ).gradient));
+}
+
+GTEST_TEST(VoxelSdfShapeTest, EllipsoidHasOneAffineBranch) {
+  const VoxelSdfShape dut(Ellipsoid(1.5, 0.75, 1.25));
+  const Vector3d p_GQ(1.0, 0.5, -0.25);
+  const auto branches = dut.CalcAffineBranches(p_GQ);
+  ASSERT_EQ(branches.size(), 1u);
+  EXPECT_TRUE(branches[0].active_region.empty());
+  EXPECT_EQ(branches[0].index, 0);
+  EXPECT_FALSE(branches[0].is_cell_invariant);
+  EXPECT_EQ(branches[0].sample.value, dut.Evaluate(p_GQ).value);
+  EXPECT_TRUE(CompareMatrices(branches[0].sample.gradient,
+                              dut.Evaluate(p_GQ).gradient));
+
+  const VoxelSdfShape::Sample cached{0.25, Vector3d::UnitZ()};
+  const auto cached_branches = dut.CalcAffineBranches(p_GQ, cached);
+  ASSERT_EQ(cached_branches.size(), 1u);
+  EXPECT_EQ(cached_branches[0].sample.value, cached.value);
+  EXPECT_EQ(cached_branches[0].sample.gradient, cached.gradient);
 }
 
 GTEST_TEST(VoxelSdfShapeTest, CopyAndMovePreserveValue) {

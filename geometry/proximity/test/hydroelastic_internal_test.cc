@@ -418,6 +418,7 @@ GTEST_TEST(Hydroelastic, GeometriesPopulationAndQuery) {
 GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   const Box box(2.0, 3.0, 4.0);
   const Cylinder cylinder(1.0, 2.0);
+  const Ellipsoid ellipsoid(1.5, 0.75, 1.25);
   const Sphere sphere(1.25);
   ProximityProperties voxel_properties;
   AddCompliantHydroelasticVoxelSdfProperties(0.5, 2e8, &voxel_properties);
@@ -519,6 +520,32 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   EXPECT_TRUE(geometries.compliant_geometry(cylinder_mesh_id).is_mesh());
   EXPECT_FALSE(geometries.compliant_geometry(cylinder_mesh_id).is_voxel_sdf());
 
+  const GeometryId ellipsoid_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(ellipsoid, ellipsoid_id, voxel_properties);
+  const CompliantGeometry& ellipsoid_voxel =
+      geometries.compliant_geometry(ellipsoid_id);
+  ASSERT_TRUE(ellipsoid_voxel.is_voxel_sdf());
+  EXPECT_EQ(ellipsoid_voxel.voxel_sdf().characteristic_length(), 0.75);
+  EXPECT_EQ(ellipsoid_voxel.voxel_sdf().pressure_scale(), 2e8 / 0.75);
+  EXPECT_TRUE(CompareMatrices(ellipsoid_voxel.voxel_sdf().cell_counts(),
+                              Vector3<int>(6, 3, 5)));
+  EXPECT_EQ(ellipsoid_voxel.voxel_sdf().evaluation_mode(),
+            VoxelSdfEvaluationMode::kPrimitiveAffine);
+  EXPECT_NEAR(ellipsoid_voxel.voxel_sdf().EvaluateSdf(Vector3d::Zero()).value,
+              -0.75, 5e-5);
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(ellipsoid, GeometryId::get_new_id(),
+                                  sampled_properties),
+      ".*Ellipsoid.*does not support sampled trilinear.*");
+
+  // Without the selector, Ellipsoid keeps its legacy compliant mesh and
+  // normalized radial pressure field.
+  const GeometryId ellipsoid_mesh_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(ellipsoid, ellipsoid_mesh_id, mesh_properties);
+  EXPECT_TRUE(geometries.compliant_geometry(ellipsoid_mesh_id).is_mesh());
+  EXPECT_FALSE(geometries.compliant_geometry(ellipsoid_mesh_id).is_voxel_sdf());
+
   ProximityProperties with_margin(voxel_properties);
   with_margin.AddProperty(kHydroGroup, kMargin, 0.01);
   DRAKE_EXPECT_THROWS_MESSAGE(
@@ -532,6 +559,10 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
       geometries.MaybeAddGeometry(cylinder, GeometryId::get_new_id(),
                                   with_margin),
       ".*Cylinder voxel SDF.*requires zero margin.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      geometries.MaybeAddGeometry(ellipsoid, GeometryId::get_new_id(),
+                                  with_margin),
+      ".*Ellipsoid voxel SDF.*requires zero margin.*");
 }
 
 void DoTestVanished(const Shape& shape, bool expect_vanished) {

@@ -591,14 +591,32 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
 
 std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const Ellipsoid& ellipsoid, const ProximityProperties& props) {
-  ValidateCompliantRepresentationSelector(props, ellipsoid.type_name(), false);
+  ValidateCompliantRepresentationSelector(props, ellipsoid.type_name(), true);
+  const double margin = NonNegativeDouble("Ellipsoid", "compliant")
+                            .Extract(props, kHydroGroup, kMargin, 0.0);
+
+  if (props.HasProperty(kHydroGroup, kCompliantRepresentation)) {
+    if (margin != 0.0) {
+      throw std::logic_error(
+          "The Ellipsoid voxel SDF compliant representation requires zero "
+          "margin");
+    }
+    PositiveDouble validator("Ellipsoid voxel SDF", "compliant");
+    const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
+    const double hydroelastic_modulus =
+        validator.Extract(props, kHydroGroup, kElastic);
+    const VoxelSdfEvaluationMode evaluation_mode =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
+                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
+    return CompliantGeometry(VoxelSdfGeometry(
+        ellipsoid, voxel_width, hydroelastic_modulus, evaluation_mode));
+  }
+
   // If nothing is said, let's go for the *cheap* tessellation strategy.
   const TessellationStrategy strategy =
       props.GetPropertyOrDefault(kHydroGroup, "tessellation_strategy",
                                  TessellationStrategy::kSingleInteriorVertex);
 
-  const double margin = NonNegativeDouble("Ellipsoid", "compliant")
-                            .Extract(props, kHydroGroup, kMargin, 0.0);
   PositiveDouble positive_validator("Ellipsoid", "compliant");
   const double edge_length =
       positive_validator.Extract(props, kHydroGroup, kRezHint);
