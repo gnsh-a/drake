@@ -1,10 +1,19 @@
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 #include <gflags/gflags.h>
 
 #include "drake/common/drake_copyable.h"
 #include "drake/common/eigen_types.h"
+#include "drake/geometry/proximity_properties.h"
+#include "drake/geometry/scene_graph.h"
 #include "drake/multibody/parsing/parser.h"
+#include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/multibody_plant_config_functions.h"
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/systems/analysis/simulator.h"
@@ -42,6 +51,12 @@ DEFINE_string(contact_surface_representation, "polygon",
 DEFINE_string(contact_approximation, "lagged",
               "Discrete contact approximation. Options are: "
               "'sap', 'similar', 'lagged'");
+DEFINE_string(hydroelastic_representation, "tet",
+              "Compliant hydroelastic representation. Options are: "
+              "'tet' or 'voxel_sdf'.");
+DEFINE_bool(validate_voxel_sdf_contacts, false,
+            "Validate both voxel-SDF bubble contacts and their finite contact "
+            "data. Requires --hydroelastic_representation=voxel_sdf.");
 
 // Simulator settings.
 DEFINE_double(realtime_rate, 1,
@@ -62,6 +77,7 @@ namespace drake {
 using geometry::SceneGraph;
 using math::RigidTransform;
 using math::RollPitchYaw;
+using multibody::ModelInstanceIndex;
 using multibody::MultibodyPlant;
 using multibody::MultibodyPlantConfig;
 using multibody::PrismaticJoint;
@@ -72,6 +88,122 @@ using systems::SimulatorConfig;
 namespace examples {
 namespace spatula_slip_control {
 namespace {
+
+std::vector<geometry::GeometryId> SetVoxelSdfCompliantRepresentation(
+    const std::array<ModelInstanceIndex, 2>& model_instances,
+    MultibodyPlant<double>* plant, SceneGraph<double>* scene_graph) {
+  DRAKE_DEMAND(plant != nullptr);
+  DRAKE_DEMAND(scene_graph != nullptr);
+  DRAKE_DEMAND(plant->get_source_id().has_value());
+
+  std::vector<geometry::GeometryId> replaced_ids;
+  for (ModelInstanceIndex model_instance : model_instances) {
+    for (multibody::BodyIndex body_index :
+         plant->GetBodyIndices(model_instance)) {
+      const auto& body = plant->get_body(body_index);
+      for (geometry::GeometryId geometry_id :
+           plant->GetCollisionGeometriesForBody(body)) {
+        const geometry::ProximityProperties* old_properties =
+            scene_graph->model_inspector().GetProximityProperties(geometry_id);
+        DRAKE_DEMAND(old_properties != nullptr);
+        const auto hydroelastic_type = old_properties->GetPropertyOrDefault(
+            geometry::internal::kHydroGroup,
+            geometry::internal::kComplianceType,
+            geometry::internal::HydroelasticType::kUndefined);
+        if (hydroelastic_type !=
+            geometry::internal::HydroelasticType::kCompliant) {
+          continue;
+        }
+
+        // Preserve the parsed resolution hint (now used as voxel width),
+        // modulus, dissipation, and friction. Only the compliant
+        // representation and its evaluation mode change.
+        geometry::ProximityProperties new_properties(*old_properties);
+        new_properties.UpdateProperty(
+            geometry::internal::kHydroGroup,
+            geometry::internal::kCompliantRepresentation,
+            std::string("voxel_sdf"));
+        new_properties.UpdateProperty(
+            geometry::internal::kHydroGroup,
+            geometry::internal::kVoxelSdfEvaluationMode,
+            geometry::VoxelSdfEvaluationMode::kPrimitiveAffine);
+        scene_graph->AssignRole(*plant->get_source_id(), geometry_id,
+                                new_properties, geometry::RoleAssign::kReplace);
+        replaced_ids.push_back(geometry_id);
+      }
+    }
+  }
+
+  if (replaced_ids.size() != 3) {
+    throw std::logic_error(
+        "Expected to replace exactly two bubble Ellipsoids and one spatula "
+        "Cylinder with voxel SDF representations");
+  }
+  return replaced_ids;
+}
+
+void ValidateVoxelSdfContactResults(
+    const MultibodyPlant<double>& plant,
+    const systems::Context<double>& plant_context,
+    const std::vector<geometry::GeometryId>& voxel_geometry_ids) {
+  DRAKE_DEMAND(voxel_geometry_ids.size() == 3);
+  const auto& contact_results =
+      plant.get_contact_results_output_port()
+          .Eval<multibody::ContactResults<double>>(plant_context);
+  if (contact_results.num_point_pair_contacts() != 0 ||
+      contact_results.num_hydroelastic_contacts() != 2) {
+    throw std::runtime_error(
+        "Expected exactly two hydroelastic bubble contacts and no point "
+        "contacts");
+  }
+
+  std::array<bool, 3> geometry_seen{};
+  auto mark_geometry_seen = [&voxel_geometry_ids,
+                             &geometry_seen](geometry::GeometryId geometry_id) {
+    const auto iter = std::find(voxel_geometry_ids.begin(),
+                                voxel_geometry_ids.end(), geometry_id);
+    if (iter == voxel_geometry_ids.end()) {
+      throw std::runtime_error(
+          "Hydroelastic contact contains an unexpected geometry");
+    }
+    geometry_seen[iter - voxel_geometry_ids.begin()] = true;
+  };
+
+  for (int i = 0; i < contact_results.num_hydroelastic_contacts(); ++i) {
+    const auto& contact = contact_results.hydroelastic_contact_info(i);
+    const auto& surface = contact.contact_surface();
+    mark_geometry_seen(surface.id_M());
+    mark_geometry_seen(surface.id_N());
+    if (surface.is_triangle() || surface.num_faces() == 0 ||
+        surface.num_vertices() == 0 ||
+        !(surface.total_area() > 0.0 && std::isfinite(surface.total_area())) ||
+        !contact.F_Ac_W().get_coeffs().allFinite() ||
+        contact.F_Ac_W().translational().norm() == 0.0) {
+      throw std::runtime_error(
+          "Voxel-SDF bubble contact has invalid surface or force data");
+    }
+    bool has_positive_pressure = false;
+    for (int v = 0; v < surface.num_vertices(); ++v) {
+      const double pressure = surface.poly_e_MN().EvaluateAtVertex(v);
+      if (!(pressure >= 0.0 && std::isfinite(pressure))) {
+        throw std::runtime_error(
+            "Voxel-SDF bubble contact has invalid pressure data");
+      }
+      has_positive_pressure = has_positive_pressure || pressure > 0.0;
+    }
+    if (!has_positive_pressure) {
+      throw std::runtime_error(
+          "Voxel-SDF bubble contact has no positive pressure");
+    }
+  }
+
+  if (!std::all_of(geometry_seen.begin(), geometry_seen.end(), [](bool seen) {
+        return seen;
+      })) {
+    throw std::runtime_error(
+        "The two bubble contacts do not cover all three voxel geometries");
+  }
+}
 
 // We create a simple leaf system that outputs a square wave signal for our
 // open loop controller. The Square system here supports an arbitrarily
@@ -130,6 +262,24 @@ class Square final : public systems::LeafSystem<double> {
 };
 
 int DoMain() {
+  if (FLAGS_hydroelastic_representation != "tet" &&
+      FLAGS_hydroelastic_representation != "voxel_sdf") {
+    throw std::logic_error(
+        "--hydroelastic_representation must be 'tet' or 'voxel_sdf'");
+  }
+  if (FLAGS_hydroelastic_representation == "voxel_sdf" &&
+      FLAGS_contact_surface_representation != "polygon") {
+    throw std::logic_error(
+        "--hydroelastic_representation=voxel_sdf requires "
+        "--contact_surface_representation=polygon");
+  }
+  if (FLAGS_validate_voxel_sdf_contacts &&
+      FLAGS_hydroelastic_representation != "voxel_sdf") {
+    throw std::logic_error(
+        "--validate_voxel_sdf_contacts requires "
+        "--hydroelastic_representation=voxel_sdf");
+  }
+
   // Construct a MultibodyPlant and a SceneGraph.
   systems::DiagramBuilder<double> builder;
 
@@ -147,12 +297,19 @@ int DoMain() {
 
   // Parse the gripper and spatula models.
   multibody::Parser parser(&builder);
-  parser.AddModelsFromUrl(
+  const auto gripper_instances = parser.AddModelsFromUrl(
       "package://drake_models/wsg_50_description/sdf/"
       "schunk_wsg_50_hydro_bubble.sdf");
-  parser.AddModelsFromUrl(
+  const auto spatula_instances = parser.AddModelsFromUrl(
       "package://drake/examples/hydroelastic/spatula_slip_control/"
       "spatula.sdf");
+  DRAKE_THROW_UNLESS(gripper_instances.size() == 1);
+  DRAKE_THROW_UNLESS(spatula_instances.size() == 1);
+  std::vector<geometry::GeometryId> voxel_geometry_ids;
+  if (FLAGS_hydroelastic_representation == "voxel_sdf") {
+    voxel_geometry_ids = SetVoxelSdfCompliantRepresentation(
+        {gripper_instances[0], spatula_instances[0]}, &plant, &scene_graph);
+  }
   // Pose the gripper and weld it to the world.
   const math::RigidTransform<double> X_WF0 = math::RigidTransform<double>(
       math::RollPitchYaw(0.0, -1.57, 0.0), Eigen::Vector3d(0, 0, 0.25));
@@ -224,6 +381,13 @@ int DoMain() {
   simulator.Initialize();
   meshcat->StartRecording();
   simulator.AdvanceTo(FLAGS_simulation_sec);
+  if (FLAGS_validate_voxel_sdf_contacts) {
+    ValidateVoxelSdfContactResults(plant, plant_context, voxel_geometry_ids);
+    if (!plant.GetPositionsAndVelocities(plant_context).allFinite()) {
+      throw std::runtime_error(
+          "Voxel-SDF simulation produced a non-finite plant state");
+    }
+  }
   meshcat->StopRecording();
 
   // TODO(#19142) According to issue 19142, we can playback contact forces and

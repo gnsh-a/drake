@@ -56,6 +56,22 @@ Animations playback comes from code like this in
   meshcat->PublishRecording();
 ```
 
+## Use tetrahedral or voxel-SDF compliant geometry
+
+By default, the compliant bubble fingers and spatula handle use tetrahedral
+hydroelastic representations. To use primitive-affine voxel signed-distance
+fields instead, run:
+
+```
+bazel run //examples/hydroelastic/spatula_slip_control:spatula_slip_control \
+-- --hydroelastic_representation=voxel_sdf
+```
+
+Voxel-SDF mode converts both bubble Ellipsoids and the spatula Cylinder
+together, so their contacts remain voxel-to-voxel. It preserves each parsed
+geometry's hydroelastic modulus, dissipation, friction, and resolution hint;
+the resolution hint becomes the voxel width. This mode currently requires
+`--contact_surface_representation=polygon`.
 
 ## Illustration and Collision geometries
 

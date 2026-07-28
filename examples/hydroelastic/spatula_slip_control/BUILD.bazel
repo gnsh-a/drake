@@ -28,7 +28,10 @@ drake_cc_binary(
         "@drake_models//:wsg_50_description",
     ],
     deps = [
+        "//geometry:proximity_properties",
+        "//geometry:scene_graph",
         "//multibody/parsing",
+        "//multibody/plant:contact_results",
         "//multibody/plant:multibody_plant_config_functions",
         "//systems/analysis:simulator",
         "//systems/analysis:simulator_config_functions",
@@ -41,8 +44,10 @@ drake_cc_binary(
     ],
     add_test_rule = True,
     test_rule_args = [
+        "--hydroelastic_representation=voxel_sdf",
         "--simulation_sec=0.1",
         "--realtime_rate=0.0",
+        "--validate_voxel_sdf_contacts",
     ],
 )
 
