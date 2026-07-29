@@ -630,6 +630,11 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
             // polygon on this cell's lower boundary cannot simply be discarded
             // on the assumption that its neighbor emitted the same polygon.
             // Suppress only a copy confirmed against an already accepted cell.
+            // This is not a conformity repair: independently linearized
+            // neighboring cells can produce distinct sheets that overlap in
+            // projection or leave gaps. Such sheets are not equivalent boundary
+            // copies, so both are retained and both contribute to contact-area
+            // and force integration.
             if (lies_on_cell_boundary &&
                 HasEquivalentBoundaryPolygon(*polygon, i, j, k,
                                              spatial_tolerance,
