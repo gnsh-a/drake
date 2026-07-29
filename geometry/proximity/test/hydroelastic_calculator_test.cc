@@ -14,7 +14,7 @@
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/geometry/proximity/proximity_utilities.h"
-#include "drake/geometry/proximity/voxel_sdf_contact.h"
+#include "drake/geometry/proximity/voxel_sdf_polygon_contact.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/math/autodiff.h"
 #include "drake/math/roll_pitch_yaw.h"
@@ -657,9 +657,9 @@ GTEST_TEST(ContactCalculatorTest, VoxelBoxPairUsesFinerGrid) {
       geometries.compliant_geometry(coarse_id).voxel_sdf();
   const VoxelSdfGeometry& fine =
       geometries.compliant_geometry(fine_id).voxel_sdf();
-  const auto coarse_surface = CalcVoxelSdfCompliantContact(
+  const auto coarse_surface = CalcVoxelSdfPolygonContact(
       coarse, X_WGs.at(coarse_id), coarse_id, fine, X_WGs.at(fine_id), fine_id);
-  const auto fine_surface = CalcVoxelSdfCompliantContact(
+  const auto fine_surface = CalcVoxelSdfPolygonContact(
       fine, X_WGs.at(fine_id), fine_id, coarse, X_WGs.at(coarse_id), coarse_id);
   ASSERT_NE(coarse_surface, nullptr);
   ASSERT_NE(fine_surface, nullptr);
@@ -702,7 +702,7 @@ GTEST_TEST(ContactCalculatorTest, MixedVoxelPairUsesFinerSphereGrid) {
       geometries.compliant_geometry(box_id).voxel_sdf();
   const VoxelSdfGeometry& sphere =
       geometries.compliant_geometry(sphere_id).voxel_sdf();
-  const auto sphere_surface = CalcVoxelSdfCompliantContact(
+  const auto sphere_surface = CalcVoxelSdfPolygonContact(
       sphere, X_WGs.at(sphere_id), sphere_id, box, X_WGs.at(box_id), box_id);
   ASSERT_NE(sphere_surface, nullptr);
 
@@ -743,8 +743,8 @@ GTEST_TEST(ContactCalculatorTest, CylinderVoxelDispatch) {
   const VoxelSdfGeometry& box =
       geometries.compliant_geometry(box_id).voxel_sdf();
   const auto direct =
-      CalcVoxelSdfCompliantContact(cylinder, X_WGs.at(cylinder_id), cylinder_id,
-                                   box, X_WGs.at(box_id), box_id);
+      CalcVoxelSdfPolygonContact(cylinder, X_WGs.at(cylinder_id), cylinder_id,
+                                 box, X_WGs.at(box_id), box_id);
   ASSERT_NE(direct, nullptr);
 
   ContactCalculator<double> calculator(
@@ -792,11 +792,11 @@ GTEST_TEST(ContactCalculatorTest, EllipsoidCylinderVoxelDispatch) {
         geometries.compliant_geometry(cylinder_id).voxel_sdf();
     std::unique_ptr<ContactSurface<double>> direct;
     if (ellipsoid_width < cylinder_width) {
-      direct = CalcVoxelSdfCompliantContact(ellipsoid, X_WGs.at(ellipsoid_id),
-                                            ellipsoid_id, cylinder,
-                                            X_WGs.at(cylinder_id), cylinder_id);
+      direct = CalcVoxelSdfPolygonContact(
+          ellipsoid, X_WGs.at(ellipsoid_id), ellipsoid_id, cylinder,
+          X_WGs.at(cylinder_id), cylinder_id);
     } else {
-      direct = CalcVoxelSdfCompliantContact(
+      direct = CalcVoxelSdfPolygonContact(
           cylinder, X_WGs.at(cylinder_id), cylinder_id, ellipsoid,
           X_WGs.at(ellipsoid_id), ellipsoid_id);
     }
@@ -853,7 +853,7 @@ GTEST_TEST(ContactCalculatorTest, SampledVoxelPairOrderUsesFinerGrid) {
       geometries.compliant_geometry(box_id).voxel_sdf();
   const VoxelSdfGeometry& sphere =
       geometries.compliant_geometry(sphere_id).voxel_sdf();
-  const auto fine_surface = CalcVoxelSdfCompliantContact(
+  const auto fine_surface = CalcVoxelSdfPolygonContact(
       sphere, X_WGs.at(sphere_id), sphere_id, box, X_WGs.at(box_id), box_id);
   ASSERT_NE(fine_surface, nullptr);
 
@@ -893,11 +893,11 @@ GTEST_TEST(ContactCalculatorTest, EqualVoxelWidthsUseLowerIdGrid) {
   const VoxelSdfGeometry& higher =
       geometries.compliant_geometry(higher_id).voxel_sdf();
   const auto lower_surface =
-      CalcVoxelSdfCompliantContact(lower, X_WGs.at(lower_id), lower_id, higher,
-                                   X_WGs.at(higher_id), higher_id);
+      CalcVoxelSdfPolygonContact(lower, X_WGs.at(lower_id), lower_id, higher,
+                                 X_WGs.at(higher_id), higher_id);
   const auto higher_surface =
-      CalcVoxelSdfCompliantContact(higher, X_WGs.at(higher_id), higher_id,
-                                   lower, X_WGs.at(lower_id), lower_id);
+      CalcVoxelSdfPolygonContact(higher, X_WGs.at(higher_id), higher_id, lower,
+                                 X_WGs.at(lower_id), lower_id);
   ASSERT_NE(lower_surface, nullptr);
   ASSERT_NE(higher_surface, nullptr);
   ASSERT_FALSE(lower_surface->Equal(*higher_surface));

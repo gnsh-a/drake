@@ -6,7 +6,7 @@
 
 #include "drake/common/eigen_types.h"
 #include "drake/geometry/geometry_ids.h"
-#include "drake/geometry/proximity/voxel_sdf_geometry.h"
+#include "drake/geometry/proximity/voxel_sdf_contact_common.h"
 #include "drake/geometry/query_results/contact_surface.h"
 #include "drake/math/rigid_transform.h"
 
@@ -14,15 +14,6 @@ namespace drake {
 namespace geometry {
 namespace internal {
 namespace hydroelastic {
-
-/* One affine signed-distance field at a voxel center. The quantities are
- expressed in the frame of the voxel. */
-struct AffineSdfField {
-  double value{};
-  Vector3<double> gradient{};
-  double pressure_scale{};
-  double characteristic_length{};
-};
 
 /* The owned result of intersecting one voxel with the equal-pressure plane of
  two affine pressure fields. All vectors are expressed in frame A. */
@@ -54,7 +45,8 @@ struct VoxelSdfContactPolygon {
  */
 std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
     const Vector3<double>& center_A, double voxel_width,
-    const AffineSdfField& sdf_A, const AffineSdfField& sdf_B_A);
+    const PressureFieldSample& sdf_A,
+    const PressureFieldSample& sdf_B_A);
 
 /* Calculates a polygonal contact surface between two compliant voxel SDF
  representations. Geometry A's complete core grid is traversed, and all
@@ -74,7 +66,7 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
       than B's. ContactCalculator satisfies this for every dispatched voxel
       pair; direct callers must preserve the ordering.
  */
-std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B);

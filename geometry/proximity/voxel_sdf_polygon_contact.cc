@@ -1,4 +1,4 @@
-#include "drake/geometry/proximity/voxel_sdf_contact.h"
+#include "drake/geometry/proximity/voxel_sdf_polygon_contact.h"
 
 #include <algorithm>
 #include <array>
@@ -30,85 +30,10 @@ constexpr double kMinimumPolygonArea = 1e-14;
 using AffineHalfSpace = VoxelSdfShape::AffineHalfSpace;
 using SdfBranch = VoxelSdfGeometry::SdfBranch;
 
-bool IsFinite(const AffineSdfField& field) {
+bool IsFinite(const PressureFieldSample& field) {
   return std::isfinite(field.value) && field.gradient.allFinite() &&
          std::isfinite(field.pressure_scale) &&
          std::isfinite(field.characteristic_length);
-}
-
-void RemoveNearDuplicates(double tolerance, std::vector<Vector3d>* vertices) {
-  DRAKE_DEMAND(vertices != nullptr);
-  const double tolerance_squared = tolerance * tolerance;
-  std::vector<Vector3d> unique;
-  unique.reserve(vertices->size());
-  for (const Vector3d& candidate : *vertices) {
-    const auto is_near = [&candidate, tolerance_squared](const Vector3d& p) {
-      return (candidate - p).squaredNorm() <= tolerance_squared;
-    };
-    if (std::none_of(unique.begin(), unique.end(), is_near)) {
-      unique.push_back(candidate);
-    }
-  }
-  *vertices = std::move(unique);
-}
-
-Vector3d CalcCentroid(const std::vector<Vector3d>& vertices) {
-  DRAKE_DEMAND(!vertices.empty());
-  Vector3d centroid = Vector3d::Zero();
-  for (const Vector3d& vertex : vertices) {
-    centroid += vertex;
-  }
-  return centroid / static_cast<double>(vertices.size());
-}
-
-double CalcSignedArea(const std::vector<Vector3d>& vertices,
-                      const Vector3d& normal) {
-  if (vertices.size() < 3) return 0.0;
-  const Vector3d centroid = CalcCentroid(vertices);
-  double twice_area = 0.0;
-  for (int i = 0; i < static_cast<int>(vertices.size()); ++i) {
-    const Vector3d a = vertices[i] - centroid;
-    const Vector3d b = vertices[(i + 1) % vertices.size()] - centroid;
-    twice_area += normal.dot(a.cross(b));
-  }
-  return 0.5 * twice_area;
-}
-
-void SortCounterClockwise(const Vector3d& normal,
-                          std::vector<Vector3d>* vertices) {
-  DRAKE_DEMAND(vertices != nullptr);
-  DRAKE_DEMAND(vertices->size() >= 3);
-  const Vector3d centroid = CalcCentroid(*vertices);
-
-  Eigen::Index least_aligned_axis{};
-  normal.cwiseAbs().minCoeff(&least_aligned_axis);
-  Vector3d axis = Vector3d::Zero();
-  axis[least_aligned_axis] = 1.0;
-  const Vector3d u = normal.cross(axis).normalized();
-  const Vector3d v = normal.cross(u);
-
-  const auto angle = [&centroid, &u, &v](const Vector3d& p) {
-    const Vector3d offset = p - centroid;
-    return std::atan2(offset.dot(v), offset.dot(u));
-  };
-  std::sort(vertices->begin(), vertices->end(),
-            [&angle, &centroid](const Vector3d& a, const Vector3d& b) {
-              const double angle_a = angle(a);
-              const double angle_b = angle(b);
-              if (angle_a != angle_b) return angle_a < angle_b;
-              return (a - centroid).squaredNorm() <
-                     (b - centroid).squaredNorm();
-            });
-  if (CalcSignedArea(*vertices, normal) < 0.0) {
-    std::reverse(vertices->begin(), vertices->end());
-  }
-}
-
-double CalcSpatialTolerance(double voxel_width, double characteristic_length_A,
-                            double characteristic_length_B) {
-  return kToleranceScale * std::numeric_limits<double>::epsilon() *
-         std::max(
-             {voxel_width, characteristic_length_A, characteristic_length_B});
 }
 
 bool ActiveRegionMayIntersectVoxel(
@@ -345,8 +270,8 @@ bool HasEquivalentBoundaryPolygon(const VoxelSdfContactPolygon& polygon,
 }
 
 std::optional<VoxelSdfContactPolygon> DoCalcVoxelSdfContactPolygon(
-    const Vector3d& center_A, double voxel_width, const AffineSdfField& sdf_A,
-    const AffineSdfField& sdf_B_A,
+    const Vector3d& center_A, double voxel_width,
+    const PressureFieldSample& sdf_A, const PressureFieldSample& sdf_B_A,
     std::span<const AffineHalfSpace> active_region_A,
     std::span<const AffineHalfSpace> active_region_B_A) {
   DRAKE_DEMAND(center_A.allFinite());
@@ -497,13 +422,13 @@ std::optional<VoxelSdfContactPolygon> DoCalcVoxelSdfContactPolygon(
 }  // namespace
 
 std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
-    const Vector3d& center_A, double voxel_width, const AffineSdfField& sdf_A,
-    const AffineSdfField& sdf_B_A) {
+    const Vector3d& center_A, double voxel_width,
+    const PressureFieldSample& sdf_A, const PressureFieldSample& sdf_B_A) {
   return DoCalcVoxelSdfContactPolygon(center_A, voxel_width, sdf_A, sdf_B_A, {},
                                       {});
 }
 
-std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B) {
@@ -587,13 +512,11 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
                                              voxel_radius, spatial_tolerance);
 
         for (const SdfBranch& branch_A : branches_A) {
-          const AffineSdfField sdf_A{
-              branch_A.sample.value, branch_A.sample.gradient,
-              A.pressure_scale(), A.characteristic_length()};
+          const PressureFieldSample sdf_A =
+              MakePressureField(A, branch_A.sample);
           for (const SdfBranch& branch_B_A : branches_B_A) {
-            const AffineSdfField sdf_B_A{
-                branch_B_A.sample.value, branch_B_A.sample.gradient,
-                B.pressure_scale(), B.characteristic_length()};
+            const PressureFieldSample sdf_B_A =
+                MakePressureField(B, branch_B_A.sample);
             std::optional<VoxelSdfContactPolygon> polygon =
                 DoCalcVoxelSdfContactPolygon(center_A, A.voxel_width(), sdf_A,
                                              sdf_B_A, branch_A.active_region,
@@ -668,31 +591,9 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfCompliantContact(
     }
   }
 
-  if (builder_A.num_faces() == 0) return nullptr;
-  DRAKE_DEMAND(static_cast<int>(grad_p_A_A_per_face.size()) ==
-               builder_A.num_faces());
-  DRAKE_DEMAND(static_cast<int>(grad_p_B_A_per_face.size()) ==
-               builder_A.num_faces());
-
-  auto [mesh_A, field_A] = builder_A.MakeMeshAndField();
-  // MeshFieldLinear requires that its underlying mesh be transformed first.
-  mesh_A->TransformVertices(X_WA);
-  field_A->Transform(X_WA);
-
-  auto grad_p_A_W_per_face =
-      std::make_unique<std::vector<Vector3d>>(std::move(grad_p_A_A_per_face));
-  auto grad_p_B_W_per_face =
-      std::make_unique<std::vector<Vector3d>>(std::move(grad_p_B_A_per_face));
-  for (Vector3d& gradient_W : *grad_p_A_W_per_face) {
-    gradient_W = X_WA.rotation() * gradient_W;
-  }
-  for (Vector3d& gradient_W : *grad_p_B_W_per_face) {
-    gradient_W = X_WA.rotation() * gradient_W;
-  }
-
-  return std::make_unique<ContactSurface<double>>(
-      id_A, id_B, std::move(mesh_A), std::move(field_A),
-      std::move(grad_p_A_W_per_face), std::move(grad_p_B_W_per_face));
+  return FinalizeContactSurface<PolyMeshBuilder<double>>(
+      std::move(builder_A), std::move(grad_p_A_A_per_face),
+      std::move(grad_p_B_A_per_face), X_WA, id_A, id_B);
 }
 
 }  // namespace hydroelastic

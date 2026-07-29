@@ -11,7 +11,7 @@
 #include "drake/geometry/proximity/mesh_intersection.h"
 #include "drake/geometry/proximity/mesh_plane_intersection.h"
 #include "drake/geometry/proximity/proximity_utilities.h"
-#include "drake/geometry/proximity/voxel_sdf_contact.h"
+#include "drake/geometry/proximity/voxel_sdf_polygon_contact.h"
 
 namespace drake {
 namespace geometry {
@@ -127,10 +127,10 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
         const bool traverse_A = voxel_A.voxel_width() <= voxel_B.voxel_width();
         std::unique_ptr<ContactSurface<double>> surface =
             traverse_A
-                ? CalcVoxelSdfCompliantContact(voxel_A, X_WGs_.at(id_A), id_A,
-                                               voxel_B, X_WGs_.at(id_B), id_B)
-                : CalcVoxelSdfCompliantContact(voxel_B, X_WGs_.at(id_B), id_B,
-                                               voxel_A, X_WGs_.at(id_A), id_A);
+                ? CalcVoxelSdfPolygonContact(voxel_A, X_WGs_.at(id_A), id_A,
+                                             voxel_B, X_WGs_.at(id_B), id_B)
+                : CalcVoxelSdfPolygonContact(voxel_B, X_WGs_.at(id_B), id_B,
+                                             voxel_A, X_WGs_.at(id_A), id_A);
         return {ContactSurfaceResult::kCalculated, std::move(surface)};
       }
     }

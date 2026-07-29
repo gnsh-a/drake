@@ -428,7 +428,7 @@ drake_cc_library(
         ":proximity_utilities",
         ":triangle_surface_mesh",
         ":volume_mesh",
-        ":voxel_sdf_contact",
+        ":voxel_sdf_polygon_contact",
         "//common:drake_export",
         "//common:hash",
         "//geometry:proximity_properties",
@@ -491,9 +491,27 @@ drake_cc_library(
 )
 
 drake_cc_library(
-    name = "voxel_sdf_contact",
-    srcs = ["voxel_sdf_contact.cc"],
-    hdrs = ["voxel_sdf_contact.h"],
+    name = "voxel_sdf_contact_common",
+    srcs = ["voxel_sdf_contact_common.cc"],
+    hdrs = ["voxel_sdf_contact_common.h"],
+    internal = True,
+    visibility = [
+        "//geometry:__pkg__",
+    ],
+    deps = [
+        ":contact_surface_utility",
+        ":voxel_sdf_geometry",
+        "//common:essential",
+        "//geometry:geometry_ids",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+    ],
+)
+
+drake_cc_library(
+    name = "voxel_sdf_polygon_contact",
+    srcs = ["voxel_sdf_polygon_contact.cc"],
+    hdrs = ["voxel_sdf_polygon_contact.h"],
     internal = True,
     visibility = [
         "//geometry:__pkg__",
@@ -502,6 +520,7 @@ drake_cc_library(
         ":contact_surface_utility",
         ":mesh_intersection",
         ":posed_half_space",
+        ":voxel_sdf_contact_common",
         ":voxel_sdf_geometry",
         "//common:essential",
         "//geometry:geometry_ids",
@@ -1456,7 +1475,7 @@ drake_cc_googletest(
     name = "hydroelastic_calculator_test",
     deps = [
         ":hydroelastic_calculator",
-        ":voxel_sdf_contact",
+        ":voxel_sdf_polygon_contact",
         "//common/test_utilities",
         "//math:autodiff",
     ],
@@ -1495,7 +1514,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "voxel_sdf_contact_test",
     deps = [
-        ":voxel_sdf_contact",
+        ":voxel_sdf_polygon_contact",
         "//common/test_utilities:eigen_matrix_compare",
         "//geometry:proximity_engine",
         "//geometry:proximity_properties",
