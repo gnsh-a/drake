@@ -1,5 +1,6 @@
 #include <cmath>
 #include <memory>
+#include <utility>
 
 #include <gtest/gtest.h>
 
@@ -185,6 +186,116 @@ TEST_F(VoxelSdfSapTest, SeparatedPoseHasNoContact) {
   const ContactResults<double>& results = EvalContactResults(*plant_context_);
   EXPECT_EQ(results.num_point_pair_contacts(), 0);
   EXPECT_EQ(results.num_hydroelastic_contacts(), 0);
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesSapTest,
+           SapConsumesTriangleSurfaceAndAdvances) {
+  constexpr double kTimeStep = 1e-3;
+  constexpr double kRadius = 1.0;
+  constexpr double kSeparation = 1.85;
+  constexpr double kVoxelWidth = 0.25;
+  constexpr double kHydroelasticModulus = 1e5;
+  constexpr double kFriction = 0.5;
+  constexpr double kMass = 10.0;
+
+  DiagramBuilder<double> builder;
+  MultibodyPlant<double>& plant =
+      AddMultibodyPlantSceneGraph(&builder, kTimeStep).plant;
+  plant.set_contact_model(ContactModel::kHydroelastic);
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
+  plant.set_contact_surface_representation(
+      HydroelasticContactRepresentation::kTriangle);
+  plant.SetUseSampledOutputPorts(false);
+  plant.mutable_gravity_field().set_gravity_vector(Vector3d::Zero());
+
+  ProximityProperties properties;
+  geometry::AddCompliantHydroelasticVoxelSdfProperties(
+      kVoxelWidth, kHydroelasticModulus,
+      geometry::VoxelSdfEvaluationMode::kPrimitiveSdf,
+      geometry::VoxelSdfExtractionMethod::kMarchingCubes, &properties);
+  geometry::AddContactMaterial(
+      /* dissipation = */ 0.0, /* point_stiffness = */ {},
+      CoulombFriction<double>(kFriction, kFriction), &properties);
+
+  const geometry::Sphere sphere(kRadius);
+  const GeometryId anchored_geometry_id =
+      plant.RegisterCollisionGeometry(plant.world_body(), RigidTransformd(),
+                                      sphere, "anchored_sphere", properties);
+  const SpatialInertia<double> M_BBcm =
+      SpatialInertia<double>::SolidSphereWithMass(kMass, kRadius);
+  const RigidBody<double>& dynamic_body =
+      plant.AddRigidBody("dynamic_sphere", M_BBcm);
+  const GeometryId dynamic_geometry_id = plant.RegisterCollisionGeometry(
+      dynamic_body, RigidTransformd(), sphere, "dynamic_sphere", properties);
+  ASSERT_LT(anchored_geometry_id, dynamic_geometry_id);
+
+  plant.Finalize();
+  std::unique_ptr<Diagram<double>> diagram = builder.Build();
+  std::unique_ptr<Context<double>> diagram_context =
+      diagram->CreateDefaultContext();
+  Context<double>& plant_context =
+      diagram->GetMutableSubsystemContext(plant, diagram_context.get());
+  plant.SetFreeBodyPose(&plant_context, dynamic_body,
+                        RigidTransformd(Vector3d(0.0, 0.0, kSeparation)));
+  plant.SetFreeBodySpatialVelocity(&plant_context, dynamic_body,
+                                   SpatialVelocity<double>::Zero());
+
+  const ContactResults<double>& initial_results =
+      plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+          plant_context);
+  EXPECT_EQ(initial_results.num_point_pair_contacts(), 0);
+  ASSERT_EQ(initial_results.num_hydroelastic_contacts(), 1);
+  const HydroelasticContactInfo<double>& initial_contact =
+      initial_results.hydroelastic_contact_info(0);
+  const ContactSurface<double>& surface = initial_contact.contact_surface();
+  EXPECT_EQ(surface.id_M(), anchored_geometry_id);
+  EXPECT_EQ(surface.id_N(), dynamic_geometry_id);
+  ASSERT_TRUE(surface.is_triangle());
+  ASSERT_GT(surface.num_faces(), 0);
+  ASSERT_GT(surface.num_vertices(), 0);
+  EXPECT_TRUE(std::isfinite(surface.total_area()));
+  EXPECT_GT(surface.total_area(), 0.0);
+  ASSERT_TRUE(surface.HasGradE_M());
+  ASSERT_TRUE(surface.HasGradE_N());
+
+  bool has_positive_pressure = false;
+  for (int vertex = 0; vertex < surface.num_vertices(); ++vertex) {
+    EXPECT_TRUE(surface.tri_mesh_W().vertex(vertex).allFinite());
+    const double pressure = surface.tri_e_MN().EvaluateAtVertex(vertex);
+    EXPECT_TRUE(std::isfinite(pressure));
+    EXPECT_GE(pressure, 0.0);
+    has_positive_pressure = has_positive_pressure || pressure > 0.0;
+  }
+  EXPECT_TRUE(has_positive_pressure);
+  for (int face = 0; face < surface.num_faces(); ++face) {
+    EXPECT_TRUE(surface.EvaluateGradE_M_W(face).allFinite());
+    EXPECT_TRUE(surface.EvaluateGradE_N_W(face).allFinite());
+  }
+
+  const SpatialForce<double>& F_Ac_W = initial_contact.F_Ac_W();
+  EXPECT_TRUE(F_Ac_W.get_coeffs().allFinite());
+  EXPECT_LT(F_Ac_W.translational().z(), 0.0);
+
+  Simulator<double> simulator(*diagram, std::move(diagram_context));
+  EXPECT_NO_THROW(simulator.AdvanceTo(kTimeStep));
+  const Context<double>& updated_plant_context =
+      plant.GetMyContextFromRoot(simulator.get_context());
+  EXPECT_TRUE(
+      plant.GetPositionsAndVelocities(updated_plant_context).allFinite());
+  const SpatialVelocity<double> V_WB =
+      dynamic_body.EvalSpatialVelocityInWorld(updated_plant_context);
+  EXPECT_TRUE(V_WB.get_coeffs().allFinite());
+  EXPECT_GT(V_WB.translational().z(), 0.0);
+
+  const ContactResults<double>& updated_results =
+      plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+          updated_plant_context);
+  for (int i = 0; i < updated_results.num_hydroelastic_contacts(); ++i) {
+    EXPECT_TRUE(updated_results.hydroelastic_contact_info(i)
+                    .F_Ac_W()
+                    .get_coeffs()
+                    .allFinite());
+  }
 }
 
 }  // namespace
