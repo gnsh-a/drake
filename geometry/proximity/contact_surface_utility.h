@@ -7,6 +7,7 @@
  assist in maintaining those invariants.
  */
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -46,8 +47,9 @@ namespace internal {
  pressure field value). Subsequently, the polygon is declared, referencing
  previously added vertices by index.
 
- The TriMeshBuilder will always tessellate every polygon around its centroid
- (adding an additional vertex to the declared vertices). */
+ TriMeshBuilder tessellates polygons passed to AddPolygon() around their
+ centroid. Triangles passed to AddTriangle() already have their final topology
+ and are inserted directly without another vertex. */
 template <typename T>
 class TriMeshBuilder {
  public:
@@ -89,10 +91,19 @@ class TriMeshBuilder {
   int AddPolygon(const std::vector<int>& polygon_vertices,
                  const Vector3<T>& nhat_B, const Vector3<T>& grad_e_MN_B);
 
+  /* Adds one triangle whose three vertices and corresponding field values have
+   already been added. The indices define its winding; this does not add a
+   centroid vertex or otherwise retessellate the triangle.
+
+   @returns The number of faces added, which is always one.
+
+   @sa AddVertex(). */
+  int AddTriangle(const std::array<int, 3>& triangle_vertices);
+
   /* Returns the total number of vertices accumulated so far. */
   int num_vertices() const { return static_cast<int>(vertices_B_.size()); }
 
-  /* Returns the total number of faces added by calls to AddPolygon(). */
+  /* Returns the total number of faces added so far. */
   int num_faces() const { return static_cast<int>(faces_.size()); }
 
   /* Create a mesh and field from the mesh data that has been aggregated by

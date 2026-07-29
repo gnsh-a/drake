@@ -1,6 +1,7 @@
 #include "drake/geometry/proximity/contact_surface_utility.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <set>
 #include <utility>
@@ -151,6 +152,40 @@ GTEST_TEST(TriMeshBuilderTest, AddingFeatures) {
 
   // Confirm that the field is built on the mesh.
   EXPECT_EQ(mesh_M.get(), &surf_field_M->mesh());
+}
+
+GTEST_TEST(TriMeshBuilderTest, AddTriangleDirectly) {
+  TriMeshBuilder<double> builder_M;
+
+#ifdef DRAKE_ASSERT_IS_ARMED
+  EXPECT_THROW(builder_M.AddTriangle({0, 1, 2}), std::exception);
+#endif
+
+  const std::array<Vector3d, 3> vertices_M{{
+      {1.0, 2.0, 3.0},
+      {4.0, 2.0, 3.0},
+      {1.0, 6.0, 3.0},
+  }};
+  const std::array<double, 3> pressures{{7.0, 11.0, 13.0}};
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(builder_M.AddVertex(vertices_M[i], pressures[i]), i);
+  }
+
+  EXPECT_EQ(builder_M.AddTriangle({2, 0, 1}), 1);
+  EXPECT_EQ(builder_M.num_vertices(), 3);
+  EXPECT_EQ(builder_M.num_faces(), 1);
+
+  auto [mesh_M, field_M] = builder_M.MakeMeshAndField();
+  ASSERT_EQ(mesh_M->num_vertices(), 3);
+  ASSERT_EQ(mesh_M->num_elements(), 1);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_TRUE(CompareMatrices(mesh_M->vertex(i), vertices_M[i]));
+    EXPECT_EQ(field_M->EvaluateAtVertex(i), pressures[i]);
+  }
+  const SurfaceTriangle& triangle = mesh_M->element(0);
+  EXPECT_EQ(triangle.vertex(0), 2);
+  EXPECT_EQ(triangle.vertex(1), 0);
+  EXPECT_EQ(triangle.vertex(2), 1);
 }
 
 // Same test as for TriMeshBuilderTest -- except no centroid is added. So, the

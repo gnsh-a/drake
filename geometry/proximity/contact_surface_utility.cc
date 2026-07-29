@@ -13,8 +13,8 @@ namespace geometry {
 namespace internal {
 namespace {
 
-template <typename T>
-void ThrowForInvalidVertexIndex(const std::vector<int>& indices,
+template <typename Indices, typename T>
+void ThrowForInvalidVertexIndex(const Indices& indices,
                                 const std::vector<Vector3<T>>& vertices,
                                 const char* func) {
   const int v_count = static_cast<int>(vertices.size());
@@ -161,6 +161,16 @@ int TriMeshBuilder<T>::AddPolygon(const std::vector<int>& polygon_vertices,
   const T& pressure_at_N = pressures_[polygon_vertices[0]];
   pressures_.emplace_back(grad_e_MN_B.dot(p_BC - p_BN) + pressure_at_N);
   return faces_.size() - initial_face_count;
+}
+
+template <typename T>
+int TriMeshBuilder<T>::AddTriangle(
+    const std::array<int, 3>& triangle_vertices) {
+  // Vertices and their pressure values must already be owned by this builder.
+  DRAKE_ASSERT_VOID(
+      ThrowForInvalidVertexIndex(triangle_vertices, vertices_B_, __func__));
+  faces_.emplace_back(triangle_vertices.data());
+  return 1;
 }
 
 template <typename T>

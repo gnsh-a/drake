@@ -491,6 +491,14 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "marching_cubes_table",
+    srcs = ["marching_cubes_table.cc"],
+    hdrs = ["marching_cubes_table.h"],
+    internal = True,
+    visibility = ["//visibility:private"],
+)
+
+drake_cc_library(
     name = "voxel_sdf_contact_common",
     srcs = ["voxel_sdf_contact_common.cc"],
     hdrs = ["voxel_sdf_contact_common.h"],
@@ -505,6 +513,21 @@ drake_cc_library(
         "//geometry:geometry_ids",
         "//geometry/query_results:contact_surface",
         "//math:geometric_transform",
+    ],
+)
+
+drake_cc_library(
+    name = "voxel_sdf_marching_cubes_contact",
+    srcs = ["voxel_sdf_marching_cubes_contact.cc"],
+    hdrs = ["voxel_sdf_marching_cubes_contact.h"],
+    internal = True,
+    visibility = [
+        "//geometry:__pkg__",
+    ],
+    deps = [
+        ":contact_surface_utility",
+        ":marching_cubes_table",
+        "//common:essential",
     ],
 )
 
@@ -1533,6 +1556,22 @@ drake_cc_googletest(
         "//geometry:geometry_ids",
         "//math:geometric_transform",
         "@fcl_internal//:fcl",
+    ],
+)
+
+drake_cc_googletest(
+    name = "marching_cubes_table_test",
+    deps = [
+        ":marching_cubes_table",
+    ],
+)
+
+drake_cc_googletest(
+    name = "voxel_sdf_marching_cubes_contact_test",
+    deps = [
+        ":marching_cubes_table",
+        ":voxel_sdf_marching_cubes_contact",
+        "//common/test_utilities:eigen_matrix_compare",
     ],
 )
 
