@@ -44,11 +44,14 @@ GTEST_TEST(VoxelSdfGeometryTest, GridConstruction) {
   EXPECT_TRUE(
       CompareMatrices(exact.cell_center(1, 2, 3), Vector3d(0.5, 1.0, 1.5)));
 
-  // The linear layout is x-fast, then y, then z.
+  // The padded linear layout is x-fast, then y, then z. The core view skips
+  // padding between rows and planes but still aliases the stored samples.
   const auto* first = &exact.sample(0, 0, 0);
+  EXPECT_EQ(first, &exact.stored_sample(1, 1, 1));
   EXPECT_EQ(&exact.sample(1, 0, 0), first + 1);
-  EXPECT_EQ(&exact.sample(0, 1, 0), first + 2);
-  EXPECT_EQ(&exact.sample(0, 0, 1), first + 6);
+  EXPECT_EQ(&exact.sample(0, 1, 0), first + exact.storage_counts()[0]);
+  EXPECT_EQ(&exact.sample(0, 0, 1),
+            first + exact.storage_counts()[0] * exact.storage_counts()[1]);
 }
 
 GTEST_TEST(VoxelSdfGeometryTest, SampledGridStorage) {
@@ -68,30 +71,72 @@ GTEST_TEST(VoxelSdfGeometryTest, SampledGridStorage) {
       CompareMatrices(sampled.storage_counts(),
                       sampled.cell_counts() + Vector3<int>::Constant(4)));
   EXPECT_TRUE(
-      CompareMatrices(primitive.storage_counts(), primitive.cell_counts()));
+      CompareMatrices(primitive.storage_counts(),
+                      primitive.cell_counts() + Vector3<int>::Constant(2)));
+  EXPECT_TRUE(CompareMatrices(
+      primitive.mc_node_counts(),
+      primitive.cell_counts() + Vector3<int>::Constant(2)));
+  EXPECT_TRUE(
+      CompareMatrices(sampled.mc_node_counts(), primitive.mc_node_counts()));
+  EXPECT_TRUE(CompareMatrices(
+      primitive.mc_cube_counts(),
+      primitive.cell_counts() + Vector3<int>::Constant(1)));
+  EXPECT_TRUE(
+      CompareMatrices(sampled.mc_cube_counts(), primitive.mc_cube_counts()));
 
   for (int k = 0; k < sampled.cell_counts()[2]; ++k) {
     for (int j = 0; j < sampled.cell_counts()[1]; ++j) {
       for (int i = 0; i < sampled.cell_counts()[0]; ++i) {
         EXPECT_TRUE(CompareMatrices(sampled.cell_center(i, j, k),
                                     primitive.cell_center(i, j, k)));
+        EXPECT_EQ(&primitive.sample(i, j, k),
+                  &primitive.stored_sample(i + 1, j + 1, k + 1));
         EXPECT_EQ(&sampled.sample(i, j, k),
                   &sampled.stored_sample(i + 2, j + 2, k + 2));
       }
     }
   }
 
+  EXPECT_TRUE(CompareMatrices(primitive.stored_sample_center(0, 0, 0),
+                              Vector3d(-1.5, -2.0, -2.5)));
+  const Vector3<int> primitive_last =
+      primitive.storage_counts() - Vector3<int>::Ones();
+  EXPECT_TRUE(CompareMatrices(
+      primitive.stored_sample_center(primitive_last[0], primitive_last[1],
+                                     primitive_last[2]),
+      Vector3d(1.5, 2.0, 2.5)));
   EXPECT_TRUE(CompareMatrices(sampled.stored_sample_center(0, 0, 0),
                               Vector3d(-2.5, -3.0, -3.5)));
-  const Vector3<int> last = sampled.storage_counts() - Vector3<int>::Ones();
-  EXPECT_TRUE(
-      CompareMatrices(sampled.stored_sample_center(last[0], last[1], last[2]),
-                      Vector3d(2.5, 3.0, 3.5)));
+  const Vector3<int> sampled_last =
+      sampled.storage_counts() - Vector3<int>::Ones();
+  EXPECT_TRUE(CompareMatrices(
+      sampled.stored_sample_center(sampled_last[0], sampled_last[1],
+                                   sampled_last[2]),
+      Vector3d(2.5, 3.0, 3.5)));
   for (const Vector3<int>& index :
-       {Vector3<int>(0, 0, 0), last, Vector3<int>(1, 3, 4)}) {
+       {Vector3<int>(0, 0, 0), sampled_last, Vector3<int>(1, 3, 4)}) {
     const auto& padding = sampled.stored_sample(index[0], index[1], index[2]);
     EXPECT_TRUE(std::isfinite(padding.value));
     EXPECT_TRUE(padding.gradient.allFinite());
+  }
+
+  const Vector3<int> mc_last =
+      primitive.mc_node_counts() - Vector3<int>::Ones();
+  EXPECT_TRUE(CompareMatrices(primitive.mc_node_position(0, 0, 0),
+                              Vector3d(-1.5, -2.0, -2.5)));
+  EXPECT_TRUE(CompareMatrices(
+      primitive.mc_node_position(mc_last[0], mc_last[1], mc_last[2]),
+      Vector3d(1.5, 2.0, 2.5)));
+  for (const Vector3<int>& index :
+       {Vector3<int>(0, 0, 0), mc_last, Vector3<int>(1, 3, 4)}) {
+    EXPECT_TRUE(CompareMatrices(
+        primitive.mc_node_position(index[0], index[1], index[2]),
+        sampled.mc_node_position(index[0], index[1], index[2])));
+    EXPECT_EQ(primitive.mc_node_value(index[0], index[1], index[2]),
+              primitive.stored_sample(index[0], index[1], index[2]).value);
+    EXPECT_EQ(
+        sampled.mc_node_value(index[0], index[1], index[2]),
+        sampled.stored_sample(index[0] + 1, index[1] + 1, index[2] + 1).value);
   }
 }
 
@@ -240,6 +285,14 @@ GTEST_TEST(VoxelSdfGeometryTest, SphereGridAndCachedSamples) {
 
   const VoxelSdfGeometry one_cell(Sphere(0.25), 1.0, 10.0);
   EXPECT_TRUE(CompareMatrices(one_cell.cell_counts(), Vector3<int>(1, 1, 1)));
+  EXPECT_TRUE(
+      CompareMatrices(one_cell.mc_node_counts(), Vector3<int>(3, 3, 3)));
+  EXPECT_TRUE(
+      CompareMatrices(one_cell.mc_cube_counts(), Vector3<int>(2, 2, 2)));
+  EXPECT_TRUE(CompareMatrices(one_cell.mc_node_position(0, 0, 0),
+                              Vector3d::Constant(-1.0)));
+  EXPECT_TRUE(CompareMatrices(one_cell.mc_node_position(2, 2, 2),
+                              Vector3d::Constant(1.0)));
   EXPECT_EQ(one_cell.cell_center(0, 0, 0), Vector3d::Zero());
   EXPECT_EQ(one_cell.sample(0, 0, 0).value, -0.25);
 }
@@ -414,13 +467,12 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
   DRAKE_EXPECT_THROWS_MESSAGE(VoxelSdfGeometry(Sphere(max), max, 1.0),
                               ".*Sphere.*too many cells.*");
 
-  // Fused center arithmetic keeps representable coordinates finite even when
-  // the multiplication h * (i + 0.5) would overflow before cancellation.
-  const VoxelSdfGeometry extreme(Box(max, 1.0, 1.0), 0.75 * max, 1.0);
-  EXPECT_TRUE(extreme.cell_center(0, 0, 0).allFinite());
-  EXPECT_TRUE(extreme.cell_center(1, 0, 0).allFinite());
-  EXPECT_TRUE(std::isfinite(extreme.sample(0, 0, 0).value));
-  EXPECT_TRUE(std::isfinite(extreme.sample(1, 0, 0).value));
+  // The two core centers are representable, but the mandatory primitive
+  // padding centers are not. Construction validates the complete registered
+  // lattice instead of silently omitting the dual-grid boundary.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(Box(max, 1.0, 1.0), 0.75 * max, 1.0),
+      ".*padded sample coordinates.*finite.*");
 
   const double too_many =
       static_cast<double>(std::numeric_limits<int>::max()) + 1.0;
@@ -433,6 +485,10 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
   const double max_count = static_cast<double>(std::numeric_limits<int>::max());
   DRAKE_EXPECT_THROWS_MESSAGE(
       VoxelSdfGeometry(Box(max_count, max_count, max_count), 1.0, 1.0),
+      ".*padded sample count overflows.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(
+          Box(max_count - 2.0, max_count - 2.0, max_count - 2.0), 1.0, 1.0),
       ".*sample count overflows.*");
   DRAKE_EXPECT_THROWS_MESSAGE(
       VoxelSdfGeometry(Box(max_count, 1.0, 1.0), 1.0, 1.0,

@@ -40,14 +40,16 @@ size_t CheckedMultiply(size_t a, size_t b, std::string_view shape_name) {
   return a * b;
 }
 
-int CheckedStorageCount(int core_count, std::string_view shape_name, int axis) {
-  constexpr int padding_count = 4;
-  if (core_count > std::numeric_limits<int>::max() - padding_count) {
+int CheckedCount(int core_count, int extra_count, std::string_view count_name,
+                 std::string_view shape_name, int axis) {
+  DRAKE_DEMAND(core_count > 0);
+  DRAKE_DEMAND(extra_count >= 0);
+  if (core_count > std::numeric_limits<int>::max() - extra_count) {
     throw std::logic_error(fmt::format(
-        "The {} voxel SDF padded sample count overflows int on axis {}",
-        shape_name, axis));
+        "The {} voxel SDF {} count overflows int on axis {}", shape_name,
+        count_name, axis));
   }
-  return core_count + padding_count;
+  return core_count + extra_count;
 }
 
 void ValidateEvaluationMode(VoxelSdfEvaluationMode mode,
@@ -157,9 +159,11 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
   }
 
   const Vector3<double> extent = 2.0 * shape_.bounding_box_half_widths();
+  const int storage_padding = core_storage_offset();
   for (int a = 0; a < 3; ++a) {
     cell_counts_[a] = CalcCellCount(extent[a], voxel_width_, a, shape_name);
-    // Centering the padded grid about the shape makes its padding symmetric.
+    // Center the core grid about the shape; fixed storage padding then extends
+    // symmetrically beyond these unchanged original-cell boundaries.
     lower_cell_boundary_[a] = -0.5 * cell_counts_[a] * voxel_width_;
     if (!std::isfinite(lower_cell_boundary_[a])) {
       throw std::logic_error(
@@ -167,13 +171,18 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                       shape_name, a));
     }
     storage_counts_[a] =
-        evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear
-            ? CheckedStorageCount(cell_counts_[a], shape_name, a)
-            : cell_counts_[a];
+        CheckedCount(cell_counts_[a], 2 * storage_padding, "padded sample",
+                     shape_name, a);
+    mc_node_counts_[a] =
+        CheckedCount(cell_counts_[a], 2, "marching-cubes node", shape_name, a);
+    mc_cube_counts_[a] =
+        CheckedCount(cell_counts_[a], 1, "marching-cubes cube", shape_name, a);
   }
 
   // Check the padded coordinate extrema before allocating. All stored centers
-  // lie between these two points on each axis.
+  // lie between these two points on each axis. The MC nodes use either this
+  // complete range (primitive mode) or a strict subset (sampled mode), so this
+  // also proves that every dual-grid node and cube boundary is finite.
   const Vector3<double> first_center = stored_sample_center(0, 0, 0);
   const Vector3<double> last_center = stored_sample_center(
       storage_counts_[0] - 1, storage_counts_[1] - 1, storage_counts_[2] - 1);
@@ -212,8 +221,10 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
               "The {} voxel SDF sample center ({}, {}, {}) is not finite",
               shape_name, i, j, k));
         }
-        // Analytical shape evaluation is registration-time work. In sampled
-        // mode, all later off-grid queries use this immutable stored lattice.
+        // Analytical shape evaluation is registration-time work. The complete
+        // padded lattice is immutable registered geometry, not Context state
+        // or query scratch. In sampled mode, all later off-grid queries use
+        // this stored lattice.
         const SdfSample sdf = shape_.Evaluate(center);
         if (!sdf.gradient.allFinite() || !std::isfinite(sdf.value)) {
           throw std::logic_error(
@@ -243,6 +254,22 @@ const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::sample(int i, int j,
   DRAKE_DEMAND(k >= 0 && k < cell_counts_[2]);
   const int offset = core_storage_offset();
   return stored_sample(i + offset, j + offset, k + offset);
+}
+
+Vector3<double> VoxelSdfGeometry::mc_node_position(int i, int j, int k) const {
+  DRAKE_DEMAND(i >= 0 && i < mc_node_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < mc_node_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < mc_node_counts_[2]);
+  const int offset = mc_storage_offset();
+  return stored_sample_center(i + offset, j + offset, k + offset);
+}
+
+double VoxelSdfGeometry::mc_node_value(int i, int j, int k) const {
+  DRAKE_DEMAND(i >= 0 && i < mc_node_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < mc_node_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < mc_node_counts_[2]);
+  const int offset = mc_storage_offset();
+  return stored_sample(i + offset, j + offset, k + offset).value;
 }
 
 Vector3<double> VoxelSdfGeometry::stored_sample_center(int i, int j,
@@ -371,7 +398,13 @@ size_t VoxelSdfGeometry::storage_linear_index(int i, int j, int k) const {
 int VoxelSdfGeometry::core_storage_offset() const {
   return evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear
              ? kSampledPadding
-             : 0;
+             : kPrimitivePadding;
+}
+
+int VoxelSdfGeometry::mc_storage_offset() const {
+  // MC uses the nearest padding layer on either side of the core. Sampled
+  // mode's second layer remains exclusively for interpolation coverage.
+  return core_storage_offset() - 1;
 }
 
 }  // namespace hydroelastic

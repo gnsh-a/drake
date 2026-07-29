@@ -382,10 +382,25 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
   ASSERT_EQ(original.evaluation_mode(),
             VoxelSdfEvaluationMode::kSampledTrilinear);
   const Vector3<int> original_counts = original.cell_counts();
+  const Vector3<int> original_storage_counts = original.storage_counts();
+  const Vector3<int> original_mc_node_counts = original.mc_node_counts();
+  const Vector3<int> original_mc_cube_counts = original.mc_cube_counts();
+  const double original_outer_value = original.stored_sample(0, 0, 0).value;
+  const double original_mc_value = original.mc_node_value(0, 0, 0);
 
   ProximityEngine<double> copy(engine_);
   const auto& copied = Tester::compliant_geometry(id, copy).voxel_sdf();
+  EXPECT_NE(&copied.stored_sample(0, 0, 0),
+            &original.stored_sample(0, 0, 0));
   EXPECT_NE(&copied.sample(0, 0, 0), &original.sample(0, 0, 0));
+  EXPECT_TRUE(
+      CompareMatrices(copied.storage_counts(), original_storage_counts));
+  EXPECT_TRUE(
+      CompareMatrices(copied.mc_node_counts(), original_mc_node_counts));
+  EXPECT_TRUE(
+      CompareMatrices(copied.mc_cube_counts(), original_mc_cube_counts));
+  EXPECT_EQ(copied.stored_sample(0, 0, 0).value, original_outer_value);
+  EXPECT_EQ(copied.mc_node_value(0, 0, 0), original_mc_value);
   EXPECT_EQ(copied.sample(0, 0, 0).value, original.sample(0, 0, 0).value);
   EXPECT_EQ(copied.evaluation_mode(), original.evaluation_mode());
 
@@ -393,9 +408,20 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
       engine_.ToScalarType<AutoDiffXd>();
   const auto& converted_voxel =
       Tester::compliant_geometry(id, *converted).voxel_sdf();
+  EXPECT_NE(&converted_voxel.stored_sample(0, 0, 0),
+            &original.stored_sample(0, 0, 0));
   EXPECT_NE(&converted_voxel.sample(0, 0, 0), &original.sample(0, 0, 0));
   EXPECT_TRUE(
       CompareMatrices(converted_voxel.cell_counts(), original.cell_counts()));
+  EXPECT_TRUE(CompareMatrices(converted_voxel.storage_counts(),
+                              original_storage_counts));
+  EXPECT_TRUE(CompareMatrices(converted_voxel.mc_node_counts(),
+                              original_mc_node_counts));
+  EXPECT_TRUE(CompareMatrices(converted_voxel.mc_cube_counts(),
+                              original_mc_cube_counts));
+  EXPECT_EQ(converted_voxel.stored_sample(0, 0, 0).value,
+            original_outer_value);
+  EXPECT_EQ(converted_voxel.mc_node_value(0, 0, 0), original_mc_value);
   EXPECT_EQ(converted_voxel.sample(0, 0, 0).value,
             original.sample(0, 0, 0).value);
   EXPECT_EQ(converted_voxel.evaluation_mode(), original.evaluation_mode());
@@ -413,6 +439,17 @@ TEST_F(ProximityEngineTests, VoxelSdfCopyScalarConversionAndReplacement) {
   EXPECT_EQ(replaced.evaluation_mode(),
             VoxelSdfEvaluationMode::kPrimitiveAffine);
   EXPECT_FALSE(CompareMatrices(replaced.cell_counts(), original_counts));
+  EXPECT_TRUE(CompareMatrices(
+      replaced.storage_counts(),
+      replaced.cell_counts() + Vector3<int>::Constant(2)));
+  EXPECT_TRUE(CompareMatrices(
+      replaced.mc_node_counts(),
+      replaced.cell_counts() + Vector3<int>::Constant(2)));
+  EXPECT_TRUE(CompareMatrices(
+      replaced.mc_cube_counts(),
+      replaced.cell_counts() + Vector3<int>::Constant(1)));
+  EXPECT_EQ(replaced.mc_node_value(0, 0, 0),
+            replaced.stored_sample(0, 0, 0).value);
 
   engine_.RemoveGeometry(id, true);
   EXPECT_EQ(Tester::hydroelastic_type(id, engine_),
