@@ -45,9 +45,9 @@ int CheckedCount(int core_count, int extra_count, std::string_view count_name,
   DRAKE_DEMAND(core_count > 0);
   DRAKE_DEMAND(extra_count >= 0);
   if (core_count > std::numeric_limits<int>::max() - extra_count) {
-    throw std::logic_error(fmt::format(
-        "The {} voxel SDF {} count overflows int on axis {}", shape_name,
-        count_name, axis));
+    throw std::logic_error(
+        fmt::format("The {} voxel SDF {} count overflows int on axis {}",
+                    shape_name, count_name, axis));
   }
   return core_count + extra_count;
 }
@@ -55,12 +55,23 @@ int CheckedCount(int core_count, int extra_count, std::string_view count_name,
 void ValidateEvaluationMode(VoxelSdfEvaluationMode mode,
                             std::string_view shape_name) {
   switch (mode) {
-    case VoxelSdfEvaluationMode::kPrimitiveAffine:
-    case VoxelSdfEvaluationMode::kSampledTrilinear:
+    case VoxelSdfEvaluationMode::kPrimitiveSdf:
+    case VoxelSdfEvaluationMode::kStoredGridTrilinear:
       return;
   }
   throw std::logic_error(
       fmt::format("The {} voxel SDF evaluation mode is invalid", shape_name));
+}
+
+void ValidateExtractionMethod(VoxelSdfExtractionMethod method,
+                              std::string_view shape_name) {
+  switch (method) {
+    case VoxelSdfExtractionMethod::kPlaneClip:
+    case VoxelSdfExtractionMethod::kMarchingCubes:
+      return;
+  }
+  throw std::logic_error(
+      fmt::format("The {} voxel SDF extraction method is invalid", shape_name));
 }
 
 }  // namespace
@@ -68,69 +79,118 @@ void ValidateEvaluationMode(VoxelSdfEvaluationMode mode,
 VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(box, voxel_width, hydroelastic_modulus,
-                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+                       VoxelSdfEvaluationMode::kPrimitiveSdf) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
                                    double hydroelastic_modulus,
                                    VoxelSdfEvaluationMode evaluation_mode)
     : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus,
-                       evaluation_mode) {}
+                       evaluation_mode, VoxelSdfExtractionMethod::kPlaneClip) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode,
+                                   VoxelSdfExtractionMethod extraction_method)
+    : VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus,
+                       evaluation_mode, extraction_method) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(cylinder, voxel_width, hydroelastic_modulus,
-                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+                       VoxelSdfEvaluationMode::kPrimitiveSdf) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
                                    double hydroelastic_modulus,
                                    VoxelSdfEvaluationMode evaluation_mode)
     : VoxelSdfGeometry(VoxelSdfShape(cylinder), voxel_width,
-                       hydroelastic_modulus, evaluation_mode) {}
+                       hydroelastic_modulus, evaluation_mode,
+                       VoxelSdfExtractionMethod::kPlaneClip) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Cylinder& cylinder, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode,
+                                   VoxelSdfExtractionMethod extraction_method)
+    : VoxelSdfGeometry(VoxelSdfShape(cylinder), voxel_width,
+                       hydroelastic_modulus, evaluation_mode,
+                       extraction_method) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Ellipsoid& ellipsoid,
                                    double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(ellipsoid, voxel_width, hydroelastic_modulus,
-                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+                       VoxelSdfEvaluationMode::kPrimitiveSdf) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Ellipsoid& ellipsoid,
                                    double voxel_width,
                                    double hydroelastic_modulus,
                                    VoxelSdfEvaluationMode evaluation_mode)
     : VoxelSdfGeometry(VoxelSdfShape(ellipsoid), voxel_width,
-                       hydroelastic_modulus, evaluation_mode) {}
+                       hydroelastic_modulus, evaluation_mode,
+                       VoxelSdfExtractionMethod::kPlaneClip) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Ellipsoid& ellipsoid,
+                                   double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode,
+                                   VoxelSdfExtractionMethod extraction_method)
+    : VoxelSdfGeometry(VoxelSdfShape(ellipsoid), voxel_width,
+                       hydroelastic_modulus, evaluation_mode,
+                       extraction_method) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus,
-                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+                       VoxelSdfEvaluationMode::kPrimitiveSdf) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
                                    double hydroelastic_modulus,
                                    VoxelSdfEvaluationMode evaluation_mode)
     : VoxelSdfGeometry(VoxelSdfShape(sphere), voxel_width, hydroelastic_modulus,
-                       evaluation_mode) {}
+                       evaluation_mode, VoxelSdfExtractionMethod::kPlaneClip) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(const Sphere& sphere, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode,
+                                   VoxelSdfExtractionMethod extraction_method)
+    : VoxelSdfGeometry(VoxelSdfShape(sphere), voxel_width, hydroelastic_modulus,
+                       evaluation_mode, extraction_method) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                                    double hydroelastic_modulus)
     : VoxelSdfGeometry(std::move(shape), voxel_width, hydroelastic_modulus,
-                       VoxelSdfEvaluationMode::kPrimitiveAffine) {}
+                       VoxelSdfEvaluationMode::kPrimitiveSdf) {}
 
 VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                                    double hydroelastic_modulus,
                                    VoxelSdfEvaluationMode evaluation_mode)
+    : VoxelSdfGeometry(std::move(shape), voxel_width, hydroelastic_modulus,
+                       evaluation_mode, VoxelSdfExtractionMethod::kPlaneClip) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode,
+                                   VoxelSdfExtractionMethod extraction_method)
     : shape_(std::move(shape)),
       voxel_width_(voxel_width),
       hydroelastic_modulus_(hydroelastic_modulus),
       characteristic_length_(shape_.characteristic_length()),
       pressure_scale_(0.0),
-      evaluation_mode_(evaluation_mode) {
+      evaluation_mode_(evaluation_mode),
+      extraction_method_(extraction_method) {
   const std::string shape_name(shape_.shape_name());
   ValidateEvaluationMode(evaluation_mode_, shape_name);
-  if (evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear &&
+  ValidateExtractionMethod(extraction_method_, shape_name);
+  if (evaluation_mode_ == VoxelSdfEvaluationMode::kStoredGridTrilinear &&
+      extraction_method_ == VoxelSdfExtractionMethod::kMarchingCubes) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF cannot combine stored-grid trilinear evaluation "
+        "with marching-cubes extraction",
+        shape_name));
+  }
+  if (evaluation_mode_ == VoxelSdfEvaluationMode::kStoredGridTrilinear &&
       !shape_.supports_sampled_trilinear()) {
     throw std::logic_error(fmt::format(
-        "The {} voxel SDF does not support sampled trilinear evaluation",
+        "The {} voxel SDF does not support stored-grid trilinear evaluation",
         shape_name));
   }
   if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
@@ -170,9 +230,8 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
           fmt::format("The {} voxel SDF grid boundary is not finite on axis {}",
                       shape_name, a));
     }
-    storage_counts_[a] =
-        CheckedCount(cell_counts_[a], 2 * storage_padding, "padded sample",
-                     shape_name, a);
+    storage_counts_[a] = CheckedCount(cell_counts_[a], 2 * storage_padding,
+                                      "padded sample", shape_name, a);
     mc_node_counts_[a] =
         CheckedCount(cell_counts_[a], 2, "marching-cubes node", shape_name, a);
     mc_cube_counts_[a] =
@@ -181,8 +240,8 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
 
   // Check the padded coordinate extrema before allocating. All stored centers
   // lie between these two points on each axis. The MC nodes use either this
-  // complete range (primitive mode) or a strict subset (sampled mode), so this
-  // also proves that every dual-grid node and cube boundary is finite.
+  // complete range (primitive mode) or a strict subset (stored-grid mode), so
+  // this also proves that every dual-grid node and cube boundary is finite.
   const Vector3<double> first_center = stored_sample_center(0, 0, 0);
   const Vector3<double> last_center = stored_sample_center(
       storage_counts_[0] - 1, storage_counts_[1] - 1, storage_counts_[2] - 1);
@@ -221,10 +280,10 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
               "The {} voxel SDF sample center ({}, {}, {}) is not finite",
               shape_name, i, j, k));
         }
-        // Analytical shape evaluation is registration-time work. The complete
-        // padded lattice is immutable registered geometry, not Context state
-        // or query scratch. In sampled mode, all later off-grid queries use
-        // this stored lattice.
+        // Shape evaluation is registration-time work. The complete padded
+        // lattice is immutable registered geometry, not Context state or query
+        // scratch. In stored-grid mode, all later off-grid queries use this
+        // stored lattice.
         const SdfSample sdf = shape_.Evaluate(center);
         if (!sdf.gradient.allFinite() || !std::isfinite(sdf.value)) {
           throw std::logic_error(
@@ -296,7 +355,8 @@ const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::stored_sample(
 
 std::optional<VoxelSdfGeometry::SdfSample> VoxelSdfGeometry::InterpolateSdf(
     const Vector3<double>& p_GQ) const {
-  DRAKE_DEMAND(evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear);
+  DRAKE_DEMAND(evaluation_mode_ ==
+               VoxelSdfEvaluationMode::kStoredGridTrilinear);
   DRAKE_DEMAND(p_GQ.allFinite());
 
   struct AxisInterval {
@@ -372,7 +432,7 @@ VoxelSdfGeometry::SdfSample VoxelSdfGeometry::EvaluateSdf(
 
 std::vector<VoxelSdfGeometry::SdfBranch> VoxelSdfGeometry::CalcCellSdfBranches(
     int i, int j, int k) const {
-  if (evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear) {
+  if (evaluation_mode_ == VoxelSdfEvaluationMode::kStoredGridTrilinear) {
     // TODO(gnsh-a): A sampled scalar SDF cannot recover the Box face branches
     // discarded during sampling, so this mode uses one local affine branch.
     return {SdfBranch{sample(i, j, k), {}, 0, false}};
@@ -396,8 +456,8 @@ size_t VoxelSdfGeometry::storage_linear_index(int i, int j, int k) const {
 }
 
 int VoxelSdfGeometry::core_storage_offset() const {
-  return evaluation_mode_ == VoxelSdfEvaluationMode::kSampledTrilinear
-             ? kSampledPadding
+  return evaluation_mode_ == VoxelSdfEvaluationMode::kStoredGridTrilinear
+             ? kStoredGridPadding
              : kPrimitivePadding;
 }
 

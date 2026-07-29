@@ -75,6 +75,8 @@ extern const char* const
                                ///< selector property name.
 extern const char* const
     kVoxelSdfEvaluationMode;  ///< Voxel SDF evaluation mode property name.
+extern const char* const
+    kVoxelSdfExtractionMethod;  ///< Voxel SDF extraction method property name.
 
 //@}
 
@@ -105,10 +107,18 @@ std::string_view to_string(const HydroelasticType& type);
 /** Selects how a voxel signed-distance-field compliant representation is
  evaluated during contact queries. */
 enum class VoxelSdfEvaluationMode {
-  /** Uses primitive-aware affine branches. */
-  kPrimitiveAffine,
+  /** Evaluates the registered primitive's signed-distance field. */
+  kPrimitiveSdf,
   /** Uses only registration-time samples with trilinear interpolation. */
-  kSampledTrilinear,
+  kStoredGridTrilinear,
+};
+
+/** Selects how a voxel signed-distance-field contact surface is extracted. */
+enum class VoxelSdfExtractionMethod {
+  /** Clips affine pressure-equality planes against original voxel cells. */
+  kPlaneClip,
+  /** Extracts the zero set of the pressure difference with marching cubes. */
+  kMarchingCubes,
 };
 
 /**
@@ -178,8 +188,9 @@ void AddCompliantHydroelasticProperties(double resolution_hint,
 /** Adds properties that opt a Box, Cylinder, Ellipsoid, or Sphere into the
  voxel signed-distance-field compliant hydroelastic representation.
 
- Cylinder and Ellipsoid use primitive-affine evaluation; sampled trilinear
- evaluation is currently supported only for Box and Sphere.
+ Cylinder and Ellipsoid use primitive SDF evaluation; stored-grid trilinear
+ evaluation is currently supported only for Box and Sphere. This overload uses
+ plane clipping for surface extraction.
 
  @param voxel_width          The width of each cubic voxel, in meters.
  @param hydroelastic_modulus A multiplier that maps penetration to pressure.
@@ -197,8 +208,9 @@ void AddCompliantHydroelasticVoxelSdfProperties(
  selected evaluation mode.
 
  Cylinder and Ellipsoid currently support only
- VoxelSdfEvaluationMode::kPrimitiveAffine; selecting sampled trilinear
- evaluation for either shape throws during geometry registration.
+ VoxelSdfEvaluationMode::kPrimitiveSdf; selecting stored-grid trilinear
+ evaluation for either shape throws during geometry registration. This overload
+ uses plane clipping for surface extraction.
 
  @param voxel_width          The width of each cubic voxel, in meters.
  @param hydroelastic_modulus A multiplier that maps penetration to pressure.
@@ -210,11 +222,37 @@ void AddCompliantHydroelasticVoxelSdfProperties(
                              would add.
  @note Geometry registration throws if `mode` is unsupported for the
        associated shape; currently, Cylinder and Ellipsoid do not support
-       sampled trilinear evaluation.
+       stored-grid trilinear evaluation.
  @pre `properties` is not nullptr. */
 void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     VoxelSdfEvaluationMode mode, ProximityProperties* properties);
+
+/** Adds properties that opt a Box, Cylinder, Ellipsoid, or Sphere into the
+ voxel signed-distance-field compliant hydroelastic representation with the
+ selected evaluation mode and surface-extraction method.
+
+ Marching-cubes extraction requires primitive SDF evaluation. Cylinder and
+ Ellipsoid do not support stored-grid trilinear evaluation.
+
+ @param voxel_width          The width of each cubic voxel, in meters.
+ @param hydroelastic_modulus A multiplier that maps penetration to pressure.
+ @param evaluation_mode      The contact-query evaluation mode.
+ @param extraction_method    The contact-surface extraction method.
+ @param[in,out] properties   The properties will be added to this property set.
+ @throws std::exception      If either numeric parameter is not finite and
+                             strictly positive, either enum value is invalid,
+                             the selected combination is unsupported, or
+                             `properties` already has a property this function
+                             would add.
+ @note Geometry registration throws if `evaluation_mode` is unsupported for
+       the associated shape.
+ @pre `properties` is not nullptr. */
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    VoxelSdfEvaluationMode evaluation_mode,
+    VoxelSdfExtractionMethod extraction_method,
+    ProximityProperties* properties);
 
 /** Compliant half spaces are handled as a special case; they do not get
  tessellated. Instead, they are treated as infinite slabs with a finite

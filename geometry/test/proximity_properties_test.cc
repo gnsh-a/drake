@@ -26,6 +26,7 @@ using internal::kPointStiffness;
 using internal::kRezHint;
 using internal::kSlabThickness;
 using internal::kVoxelSdfEvaluationMode;
+using internal::kVoxelSdfExtractionMethod;
 using CoulombFrictiond = multibody::CoulombFriction<double>;
 
 GTEST_TEST(ProximityPropertiesTest, AddContactMaterial) {
@@ -168,6 +169,7 @@ GTEST_TEST(ProximityPropertiesTest, AddCompliantVoxelSdfProperties) {
       props.GetProperty<std::string>(kHydroGroup, kCompliantRepresentation),
       "voxel_sdf");
   EXPECT_FALSE(props.HasProperty(kHydroGroup, kVoxelSdfEvaluationMode));
+  EXPECT_FALSE(props.HasProperty(kHydroGroup, kVoxelSdfExtractionMethod));
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       AddCompliantHydroelasticVoxelSdfProperties(voxel_width, modulus, &props),
@@ -175,11 +177,24 @@ GTEST_TEST(ProximityPropertiesTest, AddCompliantVoxelSdfProperties) {
 
   ProximityProperties sampled_props;
   AddCompliantHydroelasticVoxelSdfProperties(
-      voxel_width, modulus, VoxelSdfEvaluationMode::kSampledTrilinear,
+      voxel_width, modulus, VoxelSdfEvaluationMode::kStoredGridTrilinear,
       &sampled_props);
   EXPECT_EQ(sampled_props.GetProperty<VoxelSdfEvaluationMode>(
                 kHydroGroup, kVoxelSdfEvaluationMode),
-            VoxelSdfEvaluationMode::kSampledTrilinear);
+            VoxelSdfEvaluationMode::kStoredGridTrilinear);
+  EXPECT_FALSE(
+      sampled_props.HasProperty(kHydroGroup, kVoxelSdfExtractionMethod));
+
+  ProximityProperties marching_cubes_props;
+  AddCompliantHydroelasticVoxelSdfProperties(
+      voxel_width, modulus, VoxelSdfEvaluationMode::kPrimitiveSdf,
+      VoxelSdfExtractionMethod::kMarchingCubes, &marching_cubes_props);
+  EXPECT_EQ(marching_cubes_props.GetProperty<VoxelSdfEvaluationMode>(
+                kHydroGroup, kVoxelSdfEvaluationMode),
+            VoxelSdfEvaluationMode::kPrimitiveSdf);
+  EXPECT_EQ(marching_cubes_props.GetProperty<VoxelSdfExtractionMethod>(
+                kHydroGroup, kVoxelSdfExtractionMethod),
+            VoxelSdfExtractionMethod::kMarchingCubes);
 }
 
 GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
@@ -191,6 +206,7 @@ GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
     EXPECT_FALSE(props.HasProperty(kHydroGroup, kComplianceType));
     EXPECT_FALSE(props.HasProperty(kHydroGroup, kCompliantRepresentation));
     EXPECT_FALSE(props.HasProperty(kHydroGroup, kVoxelSdfEvaluationMode));
+    EXPECT_FALSE(props.HasProperty(kHydroGroup, kVoxelSdfExtractionMethod));
   };
 
   for (double bad_width : {0.0, -1.0, nan, infinity}) {
@@ -213,6 +229,24 @@ GTEST_TEST(ProximityPropertiesTest, InvalidVoxelSdfPropertiesAreAtomic) {
         AddCompliantHydroelasticVoxelSdfProperties(
             1.0, 1.0, static_cast<VoxelSdfEvaluationMode>(-1), &props),
         ".*evaluation mode.*invalid.*");
+    expect_unchanged(props);
+  }
+  {
+    ProximityProperties props;
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        AddCompliantHydroelasticVoxelSdfProperties(
+            1.0, 1.0, VoxelSdfEvaluationMode::kPrimitiveSdf,
+            static_cast<VoxelSdfExtractionMethod>(-1), &props),
+        ".*extraction method.*invalid.*");
+    expect_unchanged(props);
+  }
+  {
+    ProximityProperties props;
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        AddCompliantHydroelasticVoxelSdfProperties(
+            1.0, 1.0, VoxelSdfEvaluationMode::kStoredGridTrilinear,
+            VoxelSdfExtractionMethod::kMarchingCubes, &props),
+        ".*Marching-cubes.*requires primitive SDF.*");
     expect_unchanged(props);
   }
 }

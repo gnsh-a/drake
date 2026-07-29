@@ -451,9 +451,13 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
         validator.Extract(props, kHydroGroup, kElastic);
     const VoxelSdfEvaluationMode evaluation_mode =
         props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
-    return CompliantGeometry(VoxelSdfGeometry(
-        sphere, voxel_width, hydroelastic_modulus, evaluation_mode));
+                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
+    const VoxelSdfExtractionMethod extraction_method =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
+                                   VoxelSdfExtractionMethod::kPlaneClip);
+    return CompliantGeometry(
+        VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus,
+                         evaluation_mode, extraction_method));
   }
 
   const Sphere inflated_sphere(sphere.radius() + margin);
@@ -497,9 +501,13 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
         validator.Extract(props, kHydroGroup, kElastic);
     const VoxelSdfEvaluationMode evaluation_mode =
         props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
-    return CompliantGeometry(VoxelSdfGeometry(
-        box, voxel_width, hydroelastic_modulus, evaluation_mode));
+                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
+    const VoxelSdfExtractionMethod extraction_method =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
+                                   VoxelSdfExtractionMethod::kPlaneClip);
+    return CompliantGeometry(
+        VoxelSdfGeometry(box, voxel_width, hydroelastic_modulus,
+                         evaluation_mode, extraction_method));
   }
 
   // Define the shape of the "inflated" hydroelastic geometry to include the
@@ -540,9 +548,13 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
         validator.Extract(props, kHydroGroup, kElastic);
     const VoxelSdfEvaluationMode evaluation_mode =
         props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
-    return CompliantGeometry(VoxelSdfGeometry(
-        cylinder, voxel_width, hydroelastic_modulus, evaluation_mode));
+                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
+    const VoxelSdfExtractionMethod extraction_method =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
+                                   VoxelSdfExtractionMethod::kPlaneClip);
+    return CompliantGeometry(
+        VoxelSdfGeometry(cylinder, voxel_width, hydroelastic_modulus,
+                         evaluation_mode, extraction_method));
   }
 
   // Keep the legacy tetrahedral representation unchanged unless the caller
@@ -607,9 +619,13 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
         validator.Extract(props, kHydroGroup, kElastic);
     const VoxelSdfEvaluationMode evaluation_mode =
         props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveAffine);
-    return CompliantGeometry(VoxelSdfGeometry(
-        ellipsoid, voxel_width, hydroelastic_modulus, evaluation_mode));
+                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
+    const VoxelSdfExtractionMethod extraction_method =
+        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
+                                   VoxelSdfExtractionMethod::kPlaneClip);
+    return CompliantGeometry(
+        VoxelSdfGeometry(ellipsoid, voxel_width, hydroelastic_modulus,
+                         evaluation_mode, extraction_method));
   }
 
   // If nothing is said, let's go for the *cheap* tessellation strategy.

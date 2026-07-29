@@ -45,8 +45,7 @@ struct VoxelSdfContactPolygon {
  */
 std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
     const Vector3<double>& center_A, double voxel_width,
-    const PressureFieldSample& sdf_A,
-    const PressureFieldSample& sdf_B_A);
+    const PressureFieldSample& sdf_A, const PressureFieldSample& sdf_B_A);
 
 /* Calculates a polygonal contact surface between two compliant voxel SDF
  representations. Geometry A's complete core grid is traversed, and all
@@ -62,9 +61,9 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
  GeometryId. The returned ContactSurface orders M and N by GeometryId.
 
  @returns nullptr if no A voxel produces a positive-area contact polygon.
- @pre When B uses sampled trilinear evaluation, A's voxel width is no greater
-      than B's. ContactCalculator satisfies this for every dispatched voxel
-      pair; direct callers must preserve the ordering.
+ @pre When B uses stored-grid trilinear evaluation, A's voxel width is no
+      greater than B's. ContactCalculator satisfies this for every dispatched
+      voxel pair; direct callers must preserve the ordering.
  */
 std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,

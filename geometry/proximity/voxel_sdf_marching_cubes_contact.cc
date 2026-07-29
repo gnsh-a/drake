@@ -11,6 +11,7 @@
 
 #include "drake/common/drake_assert.h"
 #include "drake/geometry/proximity/marching_cubes_table.h"
+#include "drake/geometry/proximity/voxel_sdf_contact_common.h"
 
 namespace drake {
 namespace geometry {
@@ -209,6 +210,66 @@ MarchingCubesMeshData MarchingCubesContactBuilder::TakeMeshData() && {
   // The edge cache is intentionally not moved out. It has no role after the
   // builder is transferred toward the ContactSurface ownership sink.
   return std::move(mesh_data_);
+}
+
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B) {
+  DRAKE_DEMAND(A.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf);
+  DRAKE_DEMAND(B.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf);
+  DRAKE_DEMAND(A.extraction_method() ==
+               VoxelSdfExtractionMethod::kMarchingCubes);
+  DRAKE_DEMAND(B.extraction_method() ==
+               VoxelSdfExtractionMethod::kMarchingCubes);
+
+  // Traverse and build in A. Every query of B is expressed in B, and its
+  // pressure gradient is re-expressed in A. Registered geometry stores no
+  // posed data, while the edge cache remains local to this invocation.
+  const math::RigidTransformd X_AB = X_WA.InvertAndCompose(X_WB);
+  const math::RigidTransformd X_BA = X_AB.inverse();
+  MarchingCubesContactBuilder builder(A.voxel_width());
+
+  for (int k = 0; k < A.mc_cube_counts()[2]; ++k) {
+    for (int j = 0; j < A.mc_cube_counts()[1]; ++j) {
+      for (int i = 0; i < A.mc_cube_counts()[0]; ++i) {
+        const Vector3<int> cube_index(i, j, k);
+        std::array<MarchingCubesNode, 8> nodes_A;
+        for (int corner = 0; corner < 8; ++corner) {
+          const auto& offset = kMcCornerOffsets[corner];
+          const int node_i = i + offset[0];
+          const int node_j = j + offset[1];
+          const int node_k = k + offset[2];
+          const Vector3d p_AN_A = A.mc_node_position(node_i, node_j, node_k);
+          const double phi_A = A.mc_node_value(node_i, node_j, node_k);
+          const Vector3d p_BN_B = X_BA * p_AN_A;
+          const double phi_B = B.EvaluateSdf(p_BN_B).value;
+          nodes_A[corner] = MarchingCubesNode{
+              p_AN_A, -A.pressure_scale() * phi_A, -B.pressure_scale() * phi_B};
+        }
+        builder.AddCube(cube_index, nodes_A);
+      }
+    }
+  }
+
+  MarchingCubesMeshData mesh_data = std::move(builder).TakeMeshData();
+  std::vector<Vector3d> grad_p_A_A_per_face;
+  std::vector<Vector3d> grad_p_B_A_per_face;
+  grad_p_A_A_per_face.reserve(mesh_data.face_centroids_A.size());
+  grad_p_B_A_per_face.reserve(mesh_data.face_centroids_A.size());
+  for (const Vector3d& centroid_A : mesh_data.face_centroids_A) {
+    const VoxelSdfGeometry::SdfSample sdf_A = A.EvaluateSdf(centroid_A);
+    grad_p_A_A_per_face.push_back(-A.pressure_scale() * sdf_A.gradient);
+
+    const Vector3d centroid_B = X_BA * centroid_A;
+    const VoxelSdfGeometry::SdfSample sdf_B = B.EvaluateSdf(centroid_B);
+    grad_p_B_A_per_face.push_back(X_AB.rotation() *
+                                  (-B.pressure_scale() * sdf_B.gradient));
+  }
+
+  return FinalizeContactSurface<TriMeshBuilder<double>>(
+      std::move(mesh_data.builder_A), std::move(grad_p_A_A_per_face),
+      std::move(grad_p_B_A_per_face), X_WA, id_A, id_B);
 }
 
 }  // namespace hydroelastic

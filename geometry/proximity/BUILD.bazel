@@ -428,6 +428,7 @@ drake_cc_library(
         ":proximity_utilities",
         ":triangle_surface_mesh",
         ":volume_mesh",
+        ":voxel_sdf_marching_cubes_contact",
         ":voxel_sdf_polygon_contact",
         "//common:drake_export",
         "//common:hash",
@@ -527,7 +528,12 @@ drake_cc_library(
     deps = [
         ":contact_surface_utility",
         ":marching_cubes_table",
+        ":voxel_sdf_contact_common",
+        ":voxel_sdf_geometry",
         "//common:essential",
+        "//geometry:geometry_ids",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
     ],
 )
 
@@ -1498,6 +1504,7 @@ drake_cc_googletest(
     name = "hydroelastic_calculator_test",
     deps = [
         ":hydroelastic_calculator",
+        ":voxel_sdf_marching_cubes_contact",
         ":voxel_sdf_polygon_contact",
         "//common/test_utilities",
         "//math:autodiff",
@@ -1572,6 +1579,9 @@ drake_cc_googletest(
         ":marching_cubes_table",
         ":voxel_sdf_marching_cubes_contact",
         "//common/test_utilities:eigen_matrix_compare",
+        "//geometry:geometry_ids",
+        "//geometry:shape_specification",
+        "//math:geometric_transform",
     ],
 )
 

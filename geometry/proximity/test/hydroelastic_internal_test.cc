@@ -435,7 +435,9 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   EXPECT_EQ(voxel.voxel_sdf().voxel_width(), 0.5);
   EXPECT_EQ(voxel.voxel_sdf().hydroelastic_modulus(), 2e8);
   EXPECT_EQ(voxel.voxel_sdf().evaluation_mode(),
-            VoxelSdfEvaluationMode::kPrimitiveAffine);
+            VoxelSdfEvaluationMode::kPrimitiveSdf);
+  EXPECT_EQ(voxel.voxel_sdf().extraction_method(),
+            VoxelSdfExtractionMethod::kPlaneClip);
   DRAKE_EXPECT_THROWS_MESSAGE(voxel.compliant_mesh(), ".*voxel SDF.*");
   DRAKE_EXPECT_THROWS_MESSAGE(voxel.mesh(), ".*voxel SDF.*");
   DRAKE_EXPECT_THROWS_MESSAGE(voxel.pressure_field(), ".*voxel SDF.*");
@@ -448,7 +450,8 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   EXPECT_NE(&copied.sample(0, 0, 0), &voxel.voxel_sdf().sample(0, 0, 0));
   EXPECT_EQ(copied.sample(0, 0, 0).value,
             voxel.voxel_sdf().sample(0, 0, 0).value);
-  EXPECT_EQ(copied.evaluation_mode(), VoxelSdfEvaluationMode::kPrimitiveAffine);
+  EXPECT_EQ(copied.evaluation_mode(), VoxelSdfEvaluationMode::kPrimitiveSdf);
+  EXPECT_EQ(copied.extraction_method(), VoxelSdfExtractionMethod::kPlaneClip);
   copy.RemoveGeometry(voxel_id);
   EXPECT_EQ(copy.hydroelastic_type(voxel_id), HydroelasticType::kUndefined);
   EXPECT_EQ(geometries.hydroelastic_type(voxel_id),
@@ -465,16 +468,32 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
 
   ProximityProperties sampled_properties;
   AddCompliantHydroelasticVoxelSdfProperties(
-      0.5, 2e8, VoxelSdfEvaluationMode::kSampledTrilinear, &sampled_properties);
+      0.5, 2e8, VoxelSdfEvaluationMode::kStoredGridTrilinear,
+      &sampled_properties);
   const GeometryId sampled_id = GeometryId::get_new_id();
   geometries.MaybeAddGeometry(box, sampled_id, sampled_properties);
   const VoxelSdfGeometry& sampled =
       geometries.compliant_geometry(sampled_id).voxel_sdf();
   EXPECT_EQ(sampled.evaluation_mode(),
-            VoxelSdfEvaluationMode::kSampledTrilinear);
+            VoxelSdfEvaluationMode::kStoredGridTrilinear);
+  EXPECT_EQ(sampled.extraction_method(), VoxelSdfExtractionMethod::kPlaneClip);
   EXPECT_TRUE(
       CompareMatrices(sampled.storage_counts(),
                       sampled.cell_counts() + Vector3<int>::Constant(4)));
+
+  ProximityProperties marching_cubes_properties;
+  AddCompliantHydroelasticVoxelSdfProperties(
+      0.5, 2e8, VoxelSdfEvaluationMode::kPrimitiveSdf,
+      VoxelSdfExtractionMethod::kMarchingCubes, &marching_cubes_properties);
+  const GeometryId marching_cubes_id = GeometryId::get_new_id();
+  geometries.MaybeAddGeometry(box, marching_cubes_id,
+                              marching_cubes_properties);
+  const VoxelSdfGeometry& marching_cubes =
+      geometries.compliant_geometry(marching_cubes_id).voxel_sdf();
+  EXPECT_EQ(marching_cubes.evaluation_mode(),
+            VoxelSdfEvaluationMode::kPrimitiveSdf);
+  EXPECT_EQ(marching_cubes.extraction_method(),
+            VoxelSdfExtractionMethod::kMarchingCubes);
 
   // Without the selector, Box keeps its legacy compliant mesh.
   ProximityProperties mesh_properties;
@@ -507,12 +526,12 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   EXPECT_TRUE(CompareMatrices(cylinder_voxel.voxel_sdf().cell_counts(),
                               Vector3<int>(4, 4, 4)));
   EXPECT_EQ(cylinder_voxel.voxel_sdf().evaluation_mode(),
-            VoxelSdfEvaluationMode::kPrimitiveAffine);
+            VoxelSdfEvaluationMode::kPrimitiveSdf);
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       geometries.MaybeAddGeometry(cylinder, GeometryId::get_new_id(),
                                   sampled_properties),
-      ".*Cylinder.*does not support sampled trilinear.*");
+      ".*Cylinder.*does not support stored-grid trilinear.*");
 
   // Without the selector, Cylinder keeps its legacy compliant mesh.
   const GeometryId cylinder_mesh_id = GeometryId::get_new_id();
@@ -530,14 +549,14 @@ GTEST_TEST(Hydroelastic, VoxelSdfRegistrationValidationAndOwnership) {
   EXPECT_TRUE(CompareMatrices(ellipsoid_voxel.voxel_sdf().cell_counts(),
                               Vector3<int>(6, 3, 5)));
   EXPECT_EQ(ellipsoid_voxel.voxel_sdf().evaluation_mode(),
-            VoxelSdfEvaluationMode::kPrimitiveAffine);
+            VoxelSdfEvaluationMode::kPrimitiveSdf);
   EXPECT_NEAR(ellipsoid_voxel.voxel_sdf().EvaluateSdf(Vector3d::Zero()).value,
               -0.75, 5e-5);
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       geometries.MaybeAddGeometry(ellipsoid, GeometryId::get_new_id(),
                                   sampled_properties),
-      ".*Ellipsoid.*does not support sampled trilinear.*");
+      ".*Ellipsoid.*does not support stored-grid trilinear.*");
 
   // Without the selector, Ellipsoid keeps its legacy compliant mesh and
   // normalized radial pressure field.

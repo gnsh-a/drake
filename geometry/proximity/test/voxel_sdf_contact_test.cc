@@ -1,5 +1,3 @@
-#include "drake/geometry/proximity/voxel_sdf_polygon_contact.h"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -12,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/geometry/proximity/voxel_sdf_polygon_contact.h"
 #include "drake/geometry/proximity_engine.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/math/rotation_matrix.h"
@@ -304,11 +303,9 @@ GTEST_TEST(VoxelSdfContactTest, CubeBoundaryCases) {
 GTEST_TEST(VoxelSdfContactTest, NearlyDegeneratePressureGradients) {
   const double eps = std::numeric_limits<double>::epsilon();
   const Vector3d center = Vector3d::Zero();
-  const PressureFieldSample A =
-      MakeSdfFromPressure(1.0, Vector3d::UnitX());
+  const PressureFieldSample A = MakeSdfFromPressure(1.0, Vector3d::UnitX());
 
-  const PressureFieldSample equal =
-      MakeSdfFromPressure(1.0, Vector3d::UnitX());
+  const PressureFieldSample equal = MakeSdfFromPressure(1.0, Vector3d::UnitX());
   EXPECT_FALSE(CalcVoxelSdfContactPolygon(center, 2.0, A, equal).has_value());
 
   const PressureFieldSample below =
@@ -427,9 +424,8 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SeparatedAndTouchingBoxes) {
   const RigidTransformd X_WA;
 
   const RigidTransformd X_WB_separated(Vector3d(3.0, 0.0, 0.0));
-  EXPECT_EQ(
-      CalcVoxelSdfPolygonContact(A, X_WA, id_A, B, X_WB_separated, id_B),
-      nullptr);
+  EXPECT_EQ(CalcVoxelSdfPolygonContact(A, X_WA, id_A, B, X_WB_separated, id_B),
+            nullptr);
 
   const RigidTransformd X_WB_touching(Vector3d(2.0, 0.0, 0.0));
   const auto touching =
@@ -449,13 +445,13 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, EqualSphereAnalyticalOracle) {
   const VoxelSdfGeometry A(Sphere(radius), voxel_width, modulus);
   const VoxelSdfGeometry B(Sphere(radius), voxel_width, modulus);
   const auto [id_A, id_B] = MakeOrderedGeometryIds();
-  EXPECT_EQ(CalcVoxelSdfPolygonContact(
-                A, RigidTransformd(), id_A, B,
-                RigidTransformd(Vector3d(2.1, 0.0, 0.0)), id_B),
+  EXPECT_EQ(CalcVoxelSdfPolygonContact(A, RigidTransformd(), id_A, B,
+                                       RigidTransformd(Vector3d(2.1, 0.0, 0.0)),
+                                       id_B),
             nullptr);
-  EXPECT_EQ(CalcVoxelSdfPolygonContact(
-                A, RigidTransformd(), id_A, B,
-                RigidTransformd(Vector3d(2.0, 0.0, 0.0)), id_B),
+  EXPECT_EQ(CalcVoxelSdfPolygonContact(A, RigidTransformd(), id_A, B,
+                                       RigidTransformd(Vector3d(2.0, 0.0, 0.0)),
+                                       id_B),
             nullptr);
   const auto surface = CalcVoxelSdfPolygonContact(
       A, RigidTransformd(), id_A, B,
@@ -557,7 +553,7 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, CylinderBoxContact) {
 GTEST_TEST(VoxelSdfContactSurfaceTest, SampledBUsesOffLatticeInterpolator) {
   const VoxelSdfGeometry A(Sphere(0.25), 0.5, 100.0);
   const VoxelSdfGeometry B(Sphere(1.0), 1.0, 200.0,
-                           VoxelSdfEvaluationMode::kSampledTrilinear);
+                           VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const auto [id_A, id_B] = MakeOrderedGeometryIds();
   const RigidTransformd X_WA;
   const RigidTransformd X_WB(Vector3d(0.9, 0.1, 0.0));
@@ -567,8 +563,7 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SampledBUsesOffLatticeInterpolator) {
   const auto interpolated_B = B.InterpolateSdf(center_B);
   ASSERT_TRUE(interpolated_B.has_value());
 
-  const auto surface =
-      CalcVoxelSdfPolygonContact(A, X_WA, id_A, B, X_WB, id_B);
+  const auto surface = CalcVoxelSdfPolygonContact(A, X_WA, id_A, B, X_WB, id_B);
   ASSERT_NE(surface, nullptr);
   ExpectSurfaceInvariants(*surface, id_A, id_B);
   ASSERT_EQ(surface->num_faces(), 1);
@@ -580,9 +575,9 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SampledBUsesOffLatticeInterpolator) {
 
 GTEST_TEST(VoxelSdfContactSurfaceTest, PureSampledContactsAreFinite) {
   const VoxelSdfGeometry sphere_A(Sphere(1.0), 0.25, 125.0,
-                                  VoxelSdfEvaluationMode::kSampledTrilinear);
+                                  VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const VoxelSdfGeometry sphere_B(Sphere(1.0), 0.25, 150.0,
-                                  VoxelSdfEvaluationMode::kSampledTrilinear);
+                                  VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const auto [id_A, id_B] = MakeOrderedGeometryIds();
   const auto sphere_surface = CalcVoxelSdfPolygonContact(
       sphere_A, RigidTransformd(), id_A, sphere_B,
@@ -592,7 +587,7 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, PureSampledContactsAreFinite) {
   ExpectNoCoincidentFaces(*sphere_surface);
 
   const VoxelSdfGeometry box(Box::MakeCube(2.0), 0.25, 200.0,
-                             VoxelSdfEvaluationMode::kSampledTrilinear);
+                             VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const RigidTransformd X_WB(RotationMatrixd::MakeZRotation(0.2),
                              Vector3d(1.4, 0.1, 0.0));
   const auto rotated_surface = CalcVoxelSdfPolygonContact(
@@ -605,10 +600,11 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, PureSampledContactsAreFinite) {
 GTEST_TEST(VoxelSdfContactSurfaceTest, MixedEvaluationModesAndSeparation) {
   const VoxelSdfGeometry primitive_sphere(Sphere(1.0), 0.25, 125.0);
   const VoxelSdfGeometry sampled_sphere(
-      Sphere(1.0), 0.25, 125.0, VoxelSdfEvaluationMode::kSampledTrilinear);
+      Sphere(1.0), 0.25, 125.0, VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const VoxelSdfGeometry primitive_box(Box::MakeCube(2.0), 0.5, 200.0);
-  const VoxelSdfGeometry sampled_box(Box::MakeCube(2.0), 0.5, 200.0,
-                                     VoxelSdfEvaluationMode::kSampledTrilinear);
+  const VoxelSdfGeometry sampled_box(
+      Box::MakeCube(2.0), 0.5, 200.0,
+      VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const auto [id_sphere, id_box] = MakeOrderedGeometryIds();
   const RigidTransformd X_WB(Vector3d(1.4, 0.1, 0.0));
 
@@ -636,8 +632,8 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SphereBoxFaceBranchesCloseGaps) {
   const auto [id_sphere, id_box] = MakeOrderedGeometryIds();
   const RigidTransformd X_WB(Vector3d(1.5, 0.15, 0.1));
 
-  const auto surface = CalcVoxelSdfPolygonContact(
-      sphere, RigidTransformd(), id_sphere, box, X_WB, id_box);
+  const auto surface = CalcVoxelSdfPolygonContact(sphere, RigidTransformd(),
+                                                  id_sphere, box, X_WB, id_box);
   ASSERT_NE(surface, nullptr);
   ExpectSurfaceInvariants(*surface, id_sphere, id_box);
   // This is the frozen Sphere-Box case that exposed four strips of holes. The
@@ -667,9 +663,9 @@ GTEST_TEST(VoxelSdfContactSurfaceTest,
            SampledSharedVoxelBoundaryHasSingleOwner) {
   constexpr double voxel_width = 0.25;
   const VoxelSdfGeometry A(Box::MakeCube(2.0), voxel_width, 100.0,
-                           VoxelSdfEvaluationMode::kSampledTrilinear);
+                           VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const VoxelSdfGeometry B(Box::MakeCube(2.0), voxel_width, 100.0,
-                           VoxelSdfEvaluationMode::kSampledTrilinear);
+                           VoxelSdfEvaluationMode::kStoredGridTrilinear);
   const auto [id_A, id_B] = MakeOrderedGeometryIds();
   // Equal moduli put the x-normal equal-pressure patch on x = 0.75, an A-grid
   // boundary. Before confirmed boundary-polygon suppression, the two adjacent

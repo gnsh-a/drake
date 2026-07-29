@@ -22,6 +22,7 @@ const char* const kSlabThickness = "slab_thickness";
 const char* const kMargin = "margin";
 const char* const kCompliantRepresentation = "compliant_representation";
 const char* const kVoxelSdfEvaluationMode = "voxel_sdf_evaluation_mode";
+const char* const kVoxelSdfExtractionMethod = "voxel_sdf_extraction_method";
 
 namespace {
 
@@ -154,11 +155,20 @@ void AddCompliantHydroelasticProperties(double hydroelastic_modulus,
 
 void ValidateVoxelSdfEvaluationMode(VoxelSdfEvaluationMode mode) {
   switch (mode) {
-    case VoxelSdfEvaluationMode::kPrimitiveAffine:
-    case VoxelSdfEvaluationMode::kSampledTrilinear:
+    case VoxelSdfEvaluationMode::kPrimitiveSdf:
+    case VoxelSdfEvaluationMode::kStoredGridTrilinear:
       return;
   }
   throw std::logic_error("The voxel SDF evaluation mode is invalid");
+}
+
+void ValidateVoxelSdfExtractionMethod(VoxelSdfExtractionMethod method) {
+  switch (method) {
+    case VoxelSdfExtractionMethod::kPlaneClip:
+    case VoxelSdfExtractionMethod::kMarchingCubes:
+      return;
+  }
+  throw std::logic_error("The voxel SDF extraction method is invalid");
 }
 
 void ValidateVoxelSdfProperties(double voxel_width,
@@ -176,14 +186,31 @@ void ValidateVoxelSdfProperties(double voxel_width,
   }
 }
 
-void AddVoxelSdfProperties(double voxel_width, double hydroelastic_modulus,
-                           std::optional<VoxelSdfEvaluationMode> mode,
-                           ProximityProperties* properties) {
+void AddVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    std::optional<VoxelSdfEvaluationMode> evaluation_mode,
+    std::optional<VoxelSdfExtractionMethod> extraction_method,
+    ProximityProperties* properties) {
   DRAKE_DEMAND(properties != nullptr);
   // Validate all caller values before adding any property so a bad request
   // cannot partially modify the caller's set.
   ValidateVoxelSdfProperties(voxel_width, hydroelastic_modulus);
-  if (mode.has_value()) ValidateVoxelSdfEvaluationMode(*mode);
+  if (evaluation_mode.has_value()) {
+    ValidateVoxelSdfEvaluationMode(*evaluation_mode);
+  }
+  if (extraction_method.has_value()) {
+    ValidateVoxelSdfExtractionMethod(*extraction_method);
+  }
+  const VoxelSdfEvaluationMode effective_evaluation =
+      evaluation_mode.value_or(VoxelSdfEvaluationMode::kPrimitiveSdf);
+  const VoxelSdfExtractionMethod effective_extraction =
+      extraction_method.value_or(VoxelSdfExtractionMethod::kPlaneClip);
+  if (effective_evaluation == VoxelSdfEvaluationMode::kStoredGridTrilinear &&
+      effective_extraction == VoxelSdfExtractionMethod::kMarchingCubes) {
+    throw std::logic_error(
+        "Marching-cubes voxel SDF extraction requires primitive SDF "
+        "evaluation");
+  }
   properties->AddProperty(internal::kHydroGroup, internal::kRezHint,
                           voxel_width);
   properties->AddProperty(internal::kHydroGroup, internal::kElastic,
@@ -193,9 +220,15 @@ void AddVoxelSdfProperties(double voxel_width, double hydroelastic_modulus,
   properties->AddProperty(internal::kHydroGroup,
                           internal::kCompliantRepresentation,
                           std::string("voxel_sdf"));
-  if (mode.has_value()) {
+  if (evaluation_mode.has_value()) {
     properties->AddProperty(internal::kHydroGroup,
-                            internal::kVoxelSdfEvaluationMode, *mode);
+                            internal::kVoxelSdfEvaluationMode,
+                            *evaluation_mode);
+  }
+  if (extraction_method.has_value()) {
+    properties->AddProperty(internal::kHydroGroup,
+                            internal::kVoxelSdfExtractionMethod,
+                            *extraction_method);
   }
 }
 }  // namespace
@@ -213,13 +246,23 @@ void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     ProximityProperties* properties) {
   AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, std::nullopt,
-                        properties);
+                        std::nullopt, properties);
 }
 
 void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     VoxelSdfEvaluationMode mode, ProximityProperties* properties) {
-  AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, mode, properties);
+  AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, mode, std::nullopt,
+                        properties);
+}
+
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    VoxelSdfEvaluationMode evaluation_mode,
+    VoxelSdfExtractionMethod extraction_method,
+    ProximityProperties* properties) {
+  AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, evaluation_mode,
+                        extraction_method, properties);
 }
 
 void AddCompliantHydroelasticPropertiesForHalfSpace(

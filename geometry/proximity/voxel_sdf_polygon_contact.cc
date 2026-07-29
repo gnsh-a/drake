@@ -182,16 +182,16 @@ bool NearlyEqual(double a, double b) {
   // Pressure and gradient data can differ by a few ulps when the same field is
   // evaluated from opposite sides of an interpolation-cell boundary. Scale the
   // comparison by the data rather than reusing the length-valued tolerance.
-  const double tolerance =
-      kToleranceScale * std::numeric_limits<double>::epsilon() *
-      std::max({1.0, std::abs(a), std::abs(b)});
+  const double tolerance = kToleranceScale *
+                           std::numeric_limits<double>::epsilon() *
+                           std::max({1.0, std::abs(a), std::abs(b)});
   return std::abs(a - b) <= tolerance;
 }
 
 bool NearlyEqual(const Vector3d& a, const Vector3d& b) {
-  const double tolerance =
-      kToleranceScale * std::numeric_limits<double>::epsilon() *
-      std::max({1.0, a.norm(), b.norm()});
+  const double tolerance = kToleranceScale *
+                           std::numeric_limits<double>::epsilon() *
+                           std::max({1.0, a.norm(), b.norm()});
   return (a - b).norm() <= tolerance;
 }
 
@@ -242,9 +242,8 @@ using CellIndex = std::tuple<int, int, int>;
 using BoundaryPolygonMap =
     std::map<CellIndex, std::vector<VoxelSdfContactPolygon>>;
 
-bool HasEquivalentBoundaryPolygon(const VoxelSdfContactPolygon& polygon,
-                                  int i, int j, int k,
-                                  double spatial_tolerance,
+bool HasEquivalentBoundaryPolygon(const VoxelSdfContactPolygon& polygon, int i,
+                                  int j, int k, double spatial_tolerance,
                                   const BoundaryPolygonMap& accepted) {
   // Two nonzero-area polygons clipped to different host voxels can be
   // coincident only if those closed cubes touch: they must come from the same
@@ -432,7 +431,7 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B) {
-  if (B.evaluation_mode() == VoxelSdfEvaluationMode::kSampledTrilinear) {
+  if (B.evaluation_mode() == VoxelSdfEvaluationMode::kStoredGridTrilinear) {
     DRAKE_DEMAND(A.voxel_width() <= B.voxel_width());
   }
   // Traverse and build in A. B's queried point and gradient are converted into
@@ -459,7 +458,8 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
             CalcSpatialTolerance(A.voxel_width(), A.characteristic_length(),
                                  B.characteristic_length());
 
-        if (B.evaluation_mode() == VoxelSdfEvaluationMode::kSampledTrilinear) {
+        if (B.evaluation_mode() ==
+            VoxelSdfEvaluationMode::kStoredGridTrilinear) {
           // Reject only when the B-frame AABB of the rotated host cube cannot
           // overlap B's core grid. The dispatch-selected h_A <= h_B bounds the
           // largest projected half-width by sqrt(3) h_A / 2 <= 0.866 h_B,
@@ -485,7 +485,7 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
             PruneBranchesForVoxel(A.CalcCellSdfBranches(i, j, k), center_A,
                                   voxel_radius, spatial_tolerance);
         std::vector<SdfBranch> branches_B_A;
-        if (B.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveAffine) {
+        if (B.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf) {
           for (const SdfBranch& branch_B : B.EvaluateSdfBranches(center_B)) {
             branches_B_A.push_back(ReExpressBranchInA(branch_B, X_AB, X_BA));
           }
@@ -545,9 +545,9 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
 
             DRAKE_DEMAND(polygon->vertices_A.size() ==
                          polygon->pressures.size());
-            const bool lies_on_cell_boundary = LiesOnCellBoundary(
-                center_A, A.voxel_width(), polygon->vertices_A,
-                spatial_tolerance);
+            const bool lies_on_cell_boundary =
+                LiesOnCellBoundary(center_A, A.voxel_width(),
+                                   polygon->vertices_A, spatial_tolerance);
             // Sampled affine fields are local linearizations and can change
             // across cells. Therefore, unlike the cell-invariant path above, a
             // polygon on this cell's lower boundary cannot simply be discarded

@@ -2,11 +2,16 @@
 
 #include <array>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "drake/common/drake_copyable.h"
 #include "drake/common/eigen_types.h"
+#include "drake/geometry/geometry_ids.h"
 #include "drake/geometry/proximity/contact_surface_utility.h"
+#include "drake/geometry/proximity/voxel_sdf_geometry.h"
+#include "drake/geometry/query_results/contact_surface.h"
+#include "drake/math/rigid_transform.h"
 
 namespace drake {
 namespace geometry {
@@ -60,6 +65,24 @@ class MarchingCubesContactBuilder final {
   // {axis, lowest i, lowest j, lowest k} -> builder vertex index.
   std::map<std::array<int, 4>, int> edge_vertex_indices_;
 };
+
+/* Calculates a triangular contact surface between two compliant voxel SDF
+ representations using marching cubes. Geometry A's complete dual-grid cube
+ lattice is traversed. All intermediate geometry is constructed in frame A,
+ and B's primitive SDF is evaluated in frame B.
+
+ The returned surface owns its mesh, pressure field, and constituent pressure
+ gradients; it retains no references to either registered representation,
+ query-local builder state, or pose. Geometry A can have either the lower or
+ higher GeometryId; ContactSurface orders M and N by GeometryId.
+
+ @returns nullptr if no cube produces a retained contact triangle.
+ @pre Both geometries use primitive SDF evaluation and marching-cubes
+      extraction. */
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B);
 
 }  // namespace hydroelastic
 }  // namespace internal

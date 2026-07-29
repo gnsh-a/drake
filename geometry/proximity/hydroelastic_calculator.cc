@@ -11,6 +11,7 @@
 #include "drake/geometry/proximity/mesh_intersection.h"
 #include "drake/geometry/proximity/mesh_plane_intersection.h"
 #include "drake/geometry/proximity/proximity_utilities.h"
+#include "drake/geometry/proximity/voxel_sdf_marching_cubes_contact.h"
 #include "drake/geometry/proximity/voxel_sdf_polygon_contact.h"
 
 namespace drake {
@@ -114,23 +115,47 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
     const CompliantGeometry& compliant_A = geometries_.compliant_geometry(id_A);
     const CompliantGeometry& compliant_B = geometries_.compliant_geometry(id_B);
 
-    // The voxel calculator is double-only and currently produces polygonal
-    // surfaces. Read the current poses from the aliased map on every query;
-    // registered voxel data never contains posed or world-space data.
+    // The voxel calculators are double-only. Read the current poses from the
+    // aliased map on every query; registered voxel data never contains posed
+    // or world-space data.
     if constexpr (std::is_same_v<T, double>) {
-      if (representation_ == HydroelasticContactRepresentation::kPolygon &&
-          compliant_A.is_voxel_sdf() && compliant_B.is_voxel_sdf()) {
+      if (compliant_A.is_voxel_sdf() && compliant_B.is_voxel_sdf()) {
         const VoxelSdfGeometry& voxel_A = compliant_A.voxel_sdf();
         const VoxelSdfGeometry& voxel_B = compliant_B.voxel_sdf();
+        if (voxel_A.extraction_method() != voxel_B.extraction_method()) {
+          return {ContactSurfaceResult::kUnsupported, nullptr};
+        }
+        using VoxelContactCalculator =
+            std::unique_ptr<ContactSurface<double>> (*)(
+                const VoxelSdfGeometry&, const math::RigidTransformd&,
+                GeometryId, const VoxelSdfGeometry&,
+                const math::RigidTransformd&, GeometryId);
+        VoxelContactCalculator calc_contact{};
+        switch (voxel_A.extraction_method()) {
+          case VoxelSdfExtractionMethod::kPlaneClip:
+            if (representation_ !=
+                HydroelasticContactRepresentation::kPolygon) {
+              return {ContactSurfaceResult::kUnsupported, nullptr};
+            }
+            calc_contact = &CalcVoxelSdfPolygonContact;
+            break;
+          case VoxelSdfExtractionMethod::kMarchingCubes:
+            if (representation_ !=
+                HydroelasticContactRepresentation::kTriangle) {
+              return {ContactSurfaceResult::kUnsupported, nullptr};
+            }
+            calc_contact = &CalcVoxelSdfMarchingCubesContact;
+            break;
+        }
+        DRAKE_DEMAND(calc_contact != nullptr);
         // Traverse the finer grid. Equal widths retain the lower-id traversal
         // selected above, preserving deterministic legacy behavior.
         const bool traverse_A = voxel_A.voxel_width() <= voxel_B.voxel_width();
         std::unique_ptr<ContactSurface<double>> surface =
-            traverse_A
-                ? CalcVoxelSdfPolygonContact(voxel_A, X_WGs_.at(id_A), id_A,
-                                             voxel_B, X_WGs_.at(id_B), id_B)
-                : CalcVoxelSdfPolygonContact(voxel_B, X_WGs_.at(id_B), id_B,
-                                             voxel_A, X_WGs_.at(id_A), id_A);
+            traverse_A ? calc_contact(voxel_A, X_WGs_.at(id_A), id_A, voxel_B,
+                                      X_WGs_.at(id_B), id_B)
+                       : calc_contact(voxel_B, X_WGs_.at(id_B), id_B, voxel_A,
+                                      X_WGs_.at(id_A), id_A);
         return {ContactSurfaceResult::kCalculated, std::move(surface)};
       }
     }
