@@ -37,10 +37,10 @@ struct MarchingCubesMeshData {
 
 /* Builds the retained marching-cubes triangles for one contact query.
 
- One automatic instance spans all cubes traversed in A. Its edge cache maps
- canonical value keys to integer builder indices only; it never points into
+ One automatic instance spans all cubes traversed in A. Its vertex caches map
+ canonical value keys to integer builder indices only; they never point into
  builder storage that can reallocate. TakeMeshData() consumes the builder and
- centroids but deliberately leaves the cache behind to be destroyed with this
+ centroids but deliberately leaves the caches behind to be destroyed with this
  query-local object. */
 class MarchingCubesContactBuilder final {
  public:
@@ -64,6 +64,8 @@ class MarchingCubesContactBuilder final {
   MarchingCubesMeshData mesh_data_;
   // {axis, lowest i, lowest j, lowest k} -> builder vertex index.
   std::map<std::array<int, 4>, int> edge_vertex_indices_;
+  // Sorted pair of raw grid-edge keys -> clipped rim vertex index.
+  std::map<std::array<std::array<int, 4>, 2>, int> boundary_vertex_indices_;
 };
 
 /* Calculates a triangular contact surface between two compliant voxel SDF
