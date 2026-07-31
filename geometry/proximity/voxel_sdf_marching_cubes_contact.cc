@@ -23,15 +23,32 @@ using Eigen::Vector3d;
 
 constexpr double kToleranceScale = 64.0;
 
+// A raw marching-cubes vertex is identified by the dual-grid edge containing
+// its g = p_A - p_B zero crossing.
+using EdgeKey = std::array<int, 4>;
+// A clipped rim vertex is identified by the raw mesh edge containing its
+// zero-contact-pressure crossing.
+using BoundaryVertexKey = std::array<EdgeKey, 2>;
+
 struct EdgeVertex {
   Vector3d p_AV_A;
-  double pressure_A{};
-  double pressure_B{};
   double contact_pressure{};
-  std::array<int, 4> key{};
+  EdgeKey key{};
 };
 
-std::array<int, 4> MakeEdgeKey(const Vector3<int>& cube_index, int edge_index) {
+struct ClippedVertex {
+  Vector3d p_AV_A;
+  double contact_pressure{};
+  EdgeKey raw_edge_key{};
+  std::optional<BoundaryVertexKey> boundary_vertex_key;
+};
+
+struct ClippedPolygon {
+  std::array<ClippedVertex, 4> vertices;
+  int size{};
+};
+
+EdgeKey MakeEdgeKey(const Vector3<int>& cube_index, int edge_index) {
   const auto& endpoints = kMcEdgeEndpoints[edge_index];
   const auto& offset0 = kMcCornerOffsets[endpoints[0]];
   const auto& offset1 = kMcCornerOffsets[endpoints[1]];
@@ -50,6 +67,55 @@ std::array<int, 4> MakeEdgeKey(const Vector3<int>& cube_index, int edge_index) {
   }
   DRAKE_DEMAND(axis >= 0);
   return {axis, lowest[0], lowest[1], lowest[2]};
+}
+
+BoundaryVertexKey MakeBoundaryVertexKey(const EdgeKey& a, const EdgeKey& b) {
+  // Sorting makes incident triangles agree on the clipped vertex even when
+  // they traverse their shared raw edge in opposite directions.
+  return a < b ? BoundaryVertexKey{a, b} : BoundaryVertexKey{b, a};
+}
+
+/* Clips a raw marching-cubes triangle against linearly interpolated contact
+ pressure >= 0. The input winding is preserved, and the result has at most four
+ vertices. Strict sign changes create exact-zero rim vertices; existing
+ exact-zero vertices are retained. */
+ClippedPolygon ClipTriangleToNonnegativePressure(
+    const std::array<const EdgeVertex*, 3>& triangle) {
+  ClippedPolygon result;
+  const auto add_raw_vertex = [&result](const EdgeVertex& vertex) {
+    DRAKE_DEMAND(result.size < static_cast<int>(result.vertices.size()));
+    result.vertices[result.size++] = ClippedVertex{
+        vertex.p_AV_A, vertex.contact_pressure, vertex.key, std::nullopt};
+  };
+  const auto add_boundary_vertex = [&result](const EdgeVertex& a,
+                                             const EdgeVertex& b) {
+    DRAKE_DEMAND(result.size < static_cast<int>(result.vertices.size()));
+    DRAKE_DEMAND((a.contact_pressure < 0.0) != (b.contact_pressure < 0.0));
+    DRAKE_DEMAND(a.contact_pressure != 0.0);
+    DRAKE_DEMAND(b.contact_pressure != 0.0);
+    const double denominator = a.contact_pressure - b.contact_pressure;
+    DRAKE_DEMAND(denominator != 0.0 && std::isfinite(denominator));
+    const double t = a.contact_pressure / denominator;
+    DRAKE_DEMAND(t > 0.0 && t < 1.0 && std::isfinite(t));
+    result.vertices[result.size++] =
+        ClippedVertex{(1.0 - t) * a.p_AV_A + t * b.p_AV_A,
+                      0.0,
+                      {},
+                      MakeBoundaryVertexKey(a.key, b.key)};
+  };
+
+  for (int i = 0; i < 3; ++i) {
+    const EdgeVertex& current = *triangle[i];
+    const EdgeVertex& next = *triangle[(i + 1) % 3];
+    if (current.contact_pressure >= 0.0) {
+      add_raw_vertex(current);
+    }
+    if ((current.contact_pressure < 0.0 && next.contact_pressure > 0.0) ||
+        (current.contact_pressure > 0.0 && next.contact_pressure < 0.0)) {
+      add_boundary_vertex(current, next);
+    }
+  }
+  return result;
 }
 
 Vector3d CalcTrilinearGradient(const std::array<double, 8>& values,
@@ -115,12 +181,21 @@ void MarchingCubesContactBuilder::AddCube(
         one_t * nodes_A[a].pressure_A + t * nodes_A[b].pressure_A;
     const double pressure_B =
         one_t * nodes_A[a].pressure_B + t * nodes_A[b].pressure_B;
+    double contact_pressure = 0.5 * (pressure_A + pressure_B);
+    const double pressure_scale = std::max(
+        {1.0, std::abs(nodes_A[a].pressure_A), std::abs(nodes_A[a].pressure_B),
+         std::abs(nodes_A[b].pressure_A), std::abs(nodes_A[b].pressure_B)});
+    const double pressure_tolerance = kToleranceScale *
+                                      std::numeric_limits<double>::epsilon() *
+                                      pressure_scale;
+    // Canonical zero prevents roundoff from giving incident triangles
+    // inconsistent rim classifications.
+    if (std::abs(contact_pressure) <= pressure_tolerance) {
+      contact_pressure = 0.0;
+    }
     result = EdgeVertex{one_t * nodes_A[a].p_AN_A + t * nodes_A[b].p_AN_A,
-                        pressure_A, pressure_B, 0.5 * (pressure_A + pressure_B),
-                        MakeEdgeKey(cube_index, edge_index)};
+                        contact_pressure, MakeEdgeKey(cube_index, edge_index)};
     DRAKE_DEMAND(result->p_AV_A.allFinite());
-    DRAKE_DEMAND(std::isfinite(result->pressure_A));
-    DRAKE_DEMAND(std::isfinite(result->pressure_B));
     DRAKE_DEMAND(std::isfinite(result->contact_pressure));
     return *result;
   };
@@ -138,14 +213,6 @@ void MarchingCubesContactBuilder::AddCube(
         &get_edge_vertex(triangle_edges[1]),
         &get_edge_vertex(triangle_edges[2]),
     }};
-
-    // V1 deliberately drops the whole triangle when any constituent pressure
-    // is negative. It does not clamp or geometrically clip boundary crossings.
-    const bool has_negative_pressure =
-        std::any_of(vertices.begin(), vertices.end(), [](const EdgeVertex* v) {
-          return v->pressure_A < 0.0 || v->pressure_B < 0.0;
-        });
-    if (has_negative_pressure) continue;
 
     // Corner g values locate the crossings, but the actual mesh normal comes
     // from the vertex cross product. The derivative of the trilinear g field
@@ -183,22 +250,71 @@ void MarchingCubesContactBuilder::AddCube(
       std::swap(vertices[1], vertices[2]);
     }
 
-    // Resolve cache entries only after all triangle-level rejection tests.
-    // The cache retains integer indices, never references into builder vectors.
-    std::array<int, 3> triangle_vertices{};
-    for (int v = 0; v < 3; ++v) {
-      const EdgeVertex& edge_vertex = *vertices[v];
-      const auto [iter, inserted] = edge_vertex_indices_.try_emplace(
-          edge_vertex.key, mesh_data_.builder_A.num_vertices());
-      if (inserted) {
-        const int vertex_index = mesh_data_.builder_A.AddVertex(
-            edge_vertex.p_AV_A, edge_vertex.contact_pressure);
-        DRAKE_DEMAND(vertex_index == iter->second);
+    // On the raw p_A - p_B = 0 triangle, clipping their mean pressure once
+    // clips both constituent fields without creating two roundoff-offset rims.
+    const ClippedPolygon polygon = ClipTriangleToNonnegativePressure(vertices);
+    // A clipped triangle is either unchanged, a smaller triangle, or a quad.
+    // The preserved winding makes this fan consistent with the raw triangle.
+    for (int i = 1; i + 1 < polygon.size; ++i) {
+      const std::array<const ClippedVertex*, 3> clipped_triangle{{
+          &polygon.vertices[0],
+          &polygon.vertices[i],
+          &polygon.vertices[i + 1],
+      }};
+      const Vector3d clipped_e01 =
+          clipped_triangle[1]->p_AV_A - clipped_triangle[0]->p_AV_A;
+      const Vector3d clipped_e02 =
+          clipped_triangle[2]->p_AV_A - clipped_triangle[0]->p_AV_A;
+      const Vector3d clipped_e12 =
+          clipped_triangle[2]->p_AV_A - clipped_triangle[1]->p_AV_A;
+      const double clipped_cross_norm = clipped_e01.cross(clipped_e02).norm();
+      const double clipped_edge_scale_squared =
+          std::max({clipped_e01.squaredNorm(), clipped_e02.squaredNorm(),
+                    clipped_e12.squaredNorm()});
+      DRAKE_DEMAND(std::isfinite(clipped_cross_norm));
+      DRAKE_DEMAND(std::isfinite(clipped_edge_scale_squared));
+      const double clipped_area_tolerance =
+          kToleranceScale * std::numeric_limits<double>::epsilon() *
+          clipped_edge_scale_squared;
+      if (clipped_cross_norm <= clipped_area_tolerance) continue;
+
+      std::array<int, 3> triangle_vertices{};
+      for (int v = 0; v < 3; ++v) {
+        const ClippedVertex& vertex = *clipped_triangle[v];
+        int vertex_index{};
+        // Rim vertices are shared by raw mesh-edge identity; untouched
+        // marching-cubes vertices are shared by dual-grid-edge identity.
+        if (vertex.boundary_vertex_key.has_value()) {
+          const auto [iter, inserted] = boundary_vertex_indices_.try_emplace(
+              *vertex.boundary_vertex_key, mesh_data_.builder_A.num_vertices());
+          if (inserted) {
+            vertex_index = mesh_data_.builder_A.AddVertex(
+                vertex.p_AV_A, vertex.contact_pressure);
+            DRAKE_DEMAND(vertex_index == iter->second);
+          } else {
+            vertex_index = iter->second;
+          }
+        } else {
+          const auto [iter, inserted] = edge_vertex_indices_.try_emplace(
+              vertex.raw_edge_key, mesh_data_.builder_A.num_vertices());
+          if (inserted) {
+            vertex_index = mesh_data_.builder_A.AddVertex(
+                vertex.p_AV_A, vertex.contact_pressure);
+            DRAKE_DEMAND(vertex_index == iter->second);
+          } else {
+            vertex_index = iter->second;
+          }
+        }
+        triangle_vertices[v] = vertex_index;
       }
-      triangle_vertices[v] = iter->second;
+      DRAKE_DEMAND(mesh_data_.builder_A.AddTriangle(triangle_vertices) == 1);
+      // One raw triangle can become two faces, so gradients need a centroid
+      // recorded after clipping for each emitted face.
+      mesh_data_.face_centroids_A.push_back((clipped_triangle[0]->p_AV_A +
+                                             clipped_triangle[1]->p_AV_A +
+                                             clipped_triangle[2]->p_AV_A) /
+                                            3.0);
     }
-    DRAKE_DEMAND(mesh_data_.builder_A.AddTriangle(triangle_vertices) == 1);
-    mesh_data_.face_centroids_A.push_back(centroid_A);
   }
 }
 
@@ -207,8 +323,8 @@ MarchingCubesMeshData MarchingCubesContactBuilder::TakeMeshData() && {
   DRAKE_DEMAND(static_cast<int>(mesh_data_.face_centroids_A.size()) ==
                mesh_data_.builder_A.num_faces());
   consumed_ = true;
-  // The edge cache is intentionally not moved out. It has no role after the
-  // builder is transferred toward the ContactSurface ownership sink.
+  // The vertex caches are intentionally not moved out. They have no role after
+  // the builder is transferred toward the ContactSurface ownership sink.
   return std::move(mesh_data_);
 }
 

@@ -8,6 +8,7 @@
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_copyable.h"
 #include "drake/common/eigen_types.h"
+#include "drake/multibody/contact_solvers/tamsi_solver_statistics.h"
 
 namespace drake {
 namespace multibody {
@@ -163,24 +164,6 @@ struct TalsLimiter {
                                                                    const T& c);
 };
 }  // namespace internal
-
-/// The result from TamsiSolver::SolveWithGuess() used to report the
-/// success or failure of the solver.
-enum class TamsiSolverResult {
-  /// Successful computation.
-  kSuccess = 0,
-
-  /// The maximum number of iterations was reached.
-  kMaxIterationsReached = 1,
-
-  /// The linear solver used within the Newton-Raphson loop failed.
-  /// This might be caused by a divergent iteration that led to an invalid
-  /// Jacobian matrix.
-  kLinearSolverFailed = 2,
-
-  /// Could not solve for the α coefficient for per-iteration angle change.
-  kAlphaSolverFailed = 3,
-};
 
 /// These are the parameters controlling the iteration process of the
 /// TamsiSolver solver.

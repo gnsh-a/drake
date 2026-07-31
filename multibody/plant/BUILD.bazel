@@ -89,6 +89,7 @@ drake_cc_library(
         "//common:extract_double",
         "//math:gradient",
         "//math:linear_solve",
+        "//multibody/contact_solvers:tamsi_solver_statistics",
     ],
 )
 

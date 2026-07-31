@@ -199,8 +199,91 @@ GTEST_TEST(VoxelSdfMarchingCubesContactTest, PlanarCrossingAndWinding) {
   }
 }
 
+GTEST_TEST(VoxelSdfMarchingCubesContactTest, ClipsOnePositiveVertexToTriangle) {
+  MarchingCubesContactBuilder builder_A(1.0);
+  const auto nodes_A = MakeNodes(
+      Vector3<int>::Zero(),
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.squaredNorm() == 0.0 ? -1.0 : 1.0;
+      },
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.x() - p_AN_A.y() - p_AN_A.z();
+      });
+  builder_A.AddCube(Vector3<int>::Zero(), nodes_A);
+  MarchingCubesMeshData data = std::move(builder_A).TakeMeshData();
+
+  EXPECT_EQ(data.builder_A.num_vertices(), 3);
+  EXPECT_EQ(data.builder_A.num_faces(), 1);
+  ASSERT_EQ(data.face_centroids_A.size(), 1);
+  auto [mesh_A, field_A] = data.builder_A.MakeMeshAndField();
+  int zero_pressure_vertices = 0;
+  int positive_pressure_vertices = 0;
+  for (int v = 0; v < mesh_A->num_vertices(); ++v) {
+    const double pressure = field_A->EvaluateAtVertex(v);
+    if (pressure == 0.0) {
+      ++zero_pressure_vertices;
+    } else {
+      EXPECT_EQ(pressure, 0.5);
+      ++positive_pressure_vertices;
+    }
+  }
+  EXPECT_EQ(zero_pressure_vertices, 2);
+  EXPECT_EQ(positive_pressure_vertices, 1);
+}
+
 GTEST_TEST(VoxelSdfMarchingCubesContactTest,
-           ConservativePressureFilterAddsNoVertices) {
+           ClipsTwoPositiveVerticesToTwoTriangles) {
+  MarchingCubesContactBuilder builder_A(1.0);
+  const auto nodes_A = MakeNodes(
+      Vector3<int>::Zero(),
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.squaredNorm() == 0.0 ? -1.0 : 1.0;
+      },
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.x() + p_AN_A.y() - p_AN_A.z();
+      });
+  builder_A.AddCube(Vector3<int>::Zero(), nodes_A);
+  MarchingCubesMeshData data = std::move(builder_A).TakeMeshData();
+
+  EXPECT_EQ(data.builder_A.num_vertices(), 4);
+  EXPECT_EQ(data.builder_A.num_faces(), 2);
+  ASSERT_EQ(data.face_centroids_A.size(), 2);
+  auto [mesh_A, field_A] = data.builder_A.MakeMeshAndField();
+  int zero_pressure_vertices = 0;
+  int positive_pressure_vertices = 0;
+  for (int v = 0; v < mesh_A->num_vertices(); ++v) {
+    const double pressure = field_A->EvaluateAtVertex(v);
+    if (pressure == 0.0) {
+      ++zero_pressure_vertices;
+    } else {
+      EXPECT_EQ(pressure, 0.5);
+      ++positive_pressure_vertices;
+    }
+  }
+  EXPECT_EQ(zero_pressure_vertices, 2);
+  EXPECT_EQ(positive_pressure_vertices, 2);
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           RejectsAllNegativePressureTriangle) {
+  MarchingCubesContactBuilder builder_A(1.0);
+  const auto nodes_A = MakeNodes(
+      Vector3<int>::Zero(),
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.squaredNorm() == 0.0 ? -1.0 : 1.0;
+      },
+      [](const Vector3d&) {
+        return -1.0;
+      });
+  builder_A.AddCube(Vector3<int>::Zero(), nodes_A);
+  MarchingCubesMeshData data = std::move(builder_A).TakeMeshData();
+  EXPECT_EQ(data.builder_A.num_vertices(), 0);
+  EXPECT_EQ(data.builder_A.num_faces(), 0);
+  EXPECT_TRUE(data.face_centroids_A.empty());
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           RejectsPressureClipThatCollapsesToLine) {
   MarchingCubesContactBuilder builder_A(1.0);
   auto nodes_A = MakeNodes(
       Vector3<int>::Zero(),
@@ -215,6 +298,44 @@ GTEST_TEST(VoxelSdfMarchingCubesContactTest,
   EXPECT_EQ(data.builder_A.num_vertices(), 0);
   EXPECT_EQ(data.builder_A.num_faces(), 0);
   EXPECT_TRUE(data.face_centroids_A.empty());
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           SharedTriangleEdgeReusesBoundaryVertex) {
+  MarchingCubesContactBuilder builder_A(1.0);
+  const auto nodes_A = MakeNodes(
+      Vector3<int>::Zero(),
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.x() - 0.25;
+      },
+      [](const Vector3d& p_AN_A) {
+        return p_AN_A.y() - 0.5;
+      });
+  builder_A.AddCube(Vector3<int>::Zero(), nodes_A);
+  MarchingCubesMeshData data = std::move(builder_A).TakeMeshData();
+
+  EXPECT_EQ(data.builder_A.num_vertices(), 5);
+  EXPECT_EQ(data.builder_A.num_faces(), 3);
+  ASSERT_EQ(data.face_centroids_A.size(), 3);
+  auto [mesh_A, field_A] = data.builder_A.MakeMeshAndField();
+  int zero_pressure_vertices = 0;
+  int shared_diagonal_vertices = 0;
+  for (int v = 0; v < mesh_A->num_vertices(); ++v) {
+    const Vector3d& p_AV_A = mesh_A->vertex(v);
+    EXPECT_EQ(p_AV_A.x(), 0.25);
+    if (field_A->EvaluateAtVertex(v) == 0.0) {
+      ++zero_pressure_vertices;
+      if (p_AV_A.y() == 0.5 && p_AV_A.z() == 0.5) {
+        ++shared_diagonal_vertices;
+      }
+    }
+  }
+  EXPECT_EQ(zero_pressure_vertices, 3);
+  EXPECT_EQ(shared_diagonal_vertices, 1);
+  for (int f = 0; f < mesh_A->num_elements(); ++f) {
+    EXPECT_TRUE(
+        CompareMatrices(mesh_A->face_normal(f), Vector3d::UnitX(), 1e-14));
+  }
 }
 
 GTEST_TEST(VoxelSdfMarchingCubesContactTest, SharedGridEdgesReuseVertices) {
@@ -303,6 +424,39 @@ GTEST_TEST(VoxelSdfMarchingCubesContactTest,
     EXPECT_LT(std::abs(measurements.back().area - exact_area),
               std::abs(measurements.front().area - exact_area));
   }
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           SphereSphereHasZeroPressureRimAndAccurateArea) {
+  constexpr double kRadius = 1.0;
+  constexpr double kVoxelWidth = 0.05;
+  const Vector3d p_AB_A(1.5, 0.15, 0.1);
+  const double separation = p_AB_A.norm();
+  const double contact_radius_squared =
+      kRadius * kRadius - 0.25 * separation * separation;
+  const double exact_area = std::numbers::pi * contact_radius_squared;
+
+  const VoxelSdfGeometry A(Sphere(kRadius), kVoxelWidth, 100.0,
+                           VoxelSdfEvaluationMode::kPrimitiveSdf,
+                           VoxelSdfExtractionMethod::kMarchingCubes);
+  const VoxelSdfGeometry B(Sphere(kRadius), kVoxelWidth, 100.0,
+                           VoxelSdfEvaluationMode::kPrimitiveSdf,
+                           VoxelSdfExtractionMethod::kMarchingCubes);
+  const std::unique_ptr<ContactSurface<double>> surface =
+      CalcVoxelSdfMarchingCubesContact(
+          A, math::RigidTransformd(), GeometryId::get_new_id(), B,
+          math::RigidTransformd(p_AB_A), GeometryId::get_new_id());
+  ASSERT_NE(surface, nullptr);
+  ExpectValidMarchingCubesSurface(*surface);
+
+  bool has_zero_pressure = false;
+  for (int v = 0; v < surface->num_vertices(); ++v) {
+    has_zero_pressure =
+        has_zero_pressure || surface->tri_e_MN().EvaluateAtVertex(v) == 0.0;
+  }
+  EXPECT_TRUE(has_zero_pressure);
+  EXPECT_NEAR(surface->tri_mesh_W().total_area(), exact_area,
+              0.02 * exact_area);
 }
 
 }  // namespace

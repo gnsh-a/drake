@@ -21,6 +21,7 @@
 #include "drake/geometry/scene_graph.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/multibody/contact_solvers/contact_solver_results.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
 #include "drake/multibody/plant/constraint_specs.h"
 #include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/coulomb_friction.h"
@@ -2566,6 +2567,24 @@ class MultibodyPlant final : public internal::MultibodyTreeSystem<T> {
   /// @returns the SAP near rigid regime threshold.
   /// @see See set_sap_near_rigid_threshold().
   double get_sap_near_rigid_threshold() const;
+
+  /// Returns SAP solver statistics from the most recent sampled discrete
+  /// update, when available. The returned statistics are from the contact solve
+  /// used by the discrete update; this method does not solve contact again.
+  /// Returns std::nullopt for continuous plants, non-SAP discrete contact
+  /// solvers, live (not sampled) discrete output mode, and before the first
+  /// sampled discrete update.
+  std::optional<contact_solvers::internal::SapStatistics>
+  EvalSapSolverStatistics(const systems::Context<T>& context) const;
+
+  /// Returns TAMSI solver statistics from the most recent sampled discrete
+  /// update, when available. The returned statistics are from the contact solve
+  /// used by the discrete update; this method does not solve contact again.
+  /// Returns std::nullopt for continuous plants, non-TAMSI discrete contact
+  /// solvers, live (not sampled) discrete output mode, and before the first
+  /// sampled discrete update.
+  std::optional<contact_solvers::internal::TamsiStatistics>
+  EvalTamsiSolverStatistics(const systems::Context<T>& context) const;
 
   /// Return the default value for contact representation, given the desired
   /// time step. Discrete systems default to use polygons; continuous systems

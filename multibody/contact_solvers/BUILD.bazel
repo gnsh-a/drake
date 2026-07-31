@@ -34,6 +34,7 @@ drake_cc_package_library(
         ":sparse_linear_operator",
         ":supernodal_solver",
         ":system_dynamics_data",
+        ":tamsi_solver_statistics",
     ],
 )
 
@@ -89,7 +90,16 @@ drake_cc_library(
     name = "contact_solver_results",
     srcs = ["contact_solver_results.cc"],
     hdrs = ["contact_solver_results.h"],
-    deps = ["//common:default_scalars"],
+    deps = [
+        ":tamsi_solver_statistics",
+        "//common:default_scalars",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
+    ],
+)
+
+drake_cc_library(
+    name = "tamsi_solver_statistics",
+    hdrs = ["tamsi_solver_statistics.h"],
 )
 
 drake_cc_library(
