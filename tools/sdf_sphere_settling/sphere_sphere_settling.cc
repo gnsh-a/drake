@@ -169,7 +169,7 @@ ProximityProperties MakeProperties(Representation representation) {
   } else {
     geometry::AddCompliantHydroelasticVoxelSdfProperties(
         kResolution, kHydroelasticModulus,
-        geometry::VoxelSdfEvaluationMode::kPrimitiveAffine, &properties);
+        geometry::VoxelSdfEvaluationMode::kPrimitiveSdf, &properties);
   }
   return properties;
 }
