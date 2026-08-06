@@ -531,6 +531,168 @@ GTEST_TEST(VoxelSdfGeometryTest, RejectsInvalidOrOverflowingGrids) {
       ".*cannot combine stored-grid trilinear.*marching-cubes.*");
 }
 
+VoxelSdfGeometry MakeCornerSampled(
+    double voxel_width, VoxelSdfCornerGradient gradient,
+    const VoxelSdfShape& shape = VoxelSdfShape(Sphere(1.0))) {
+  return VoxelSdfGeometry(shape, voxel_width, 10.0,
+                          VoxelSdfEvaluationMode::kPrimitiveSdf,
+                          VoxelSdfExtractionMethod::kPlaneClip,
+                          VoxelSdfSamplingSite::kCellCorner, gradient);
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, CornerLatticeConstruction) {
+  const VoxelSdfGeometry corner =
+      MakeCornerSampled(1.0, VoxelSdfCornerGradient::kFiniteDifference,
+                        VoxelSdfShape(Box(2.0, 3.0, 4.0)));
+  EXPECT_EQ(corner.sampling_site(), VoxelSdfSamplingSite::kCellCorner);
+  EXPECT_EQ(corner.corner_gradient(),
+            VoxelSdfCornerGradient::kFiniteDifference);
+  // One more node than cells per axis, spanning the unchanged core boundaries.
+  EXPECT_TRUE(CompareMatrices(corner.corner_counts(), Vector3<int>(3, 4, 5)));
+  EXPECT_TRUE(CompareMatrices(corner.corner_position(0, 0, 0),
+                              corner.lower_cell_boundary()));
+  EXPECT_TRUE(CompareMatrices(corner.corner_position(2, 3, 4),
+                              -corner.lower_cell_boundary()));
+
+  // The center lattice, and therefore the dual marching-cubes view, is
+  // untouched by the corner lattice living alongside it.
+  const VoxelSdfGeometry center(Box(2.0, 3.0, 4.0), 1.0, 10.0);
+  EXPECT_EQ(center.sampling_site(), VoxelSdfSamplingSite::kCellCenter);
+  EXPECT_TRUE(CompareMatrices(corner.cell_counts(), center.cell_counts()));
+  EXPECT_TRUE(
+      CompareMatrices(corner.storage_counts(), center.storage_counts()));
+  EXPECT_TRUE(
+      CompareMatrices(corner.mc_node_counts(), center.mc_node_counts()));
+  for (int k = 0; k < corner.mc_node_counts()[2]; ++k) {
+    for (int j = 0; j < corner.mc_node_counts()[1]; ++j) {
+      for (int i = 0; i < corner.mc_node_counts()[0]; ++i) {
+        EXPECT_TRUE(CompareMatrices(corner.mc_node_position(i, j, k),
+                                    center.mc_node_position(i, j, k)));
+        EXPECT_EQ(corner.mc_node_value(i, j, k), center.mc_node_value(i, j, k));
+      }
+    }
+  }
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, CornerAffineSampleReconstruction) {
+  constexpr double h = 0.25;
+  const VoxelSdfGeometry fd =
+      MakeCornerSampled(h, VoxelSdfCornerGradient::kFiniteDifference);
+  const VoxelSdfGeometry analytic =
+      MakeCornerSampled(h, VoxelSdfCornerGradient::kAnalyticAverage);
+  constexpr int i = 3;
+  constexpr int j = 4;
+  constexpr int k = 5;
+
+  double value_sum = 0.0;
+  Vector3d gradient_sum = Vector3d::Zero();
+  Vector3d plus_sum = Vector3d::Zero();
+  Vector3d minus_sum = Vector3d::Zero();
+  for (int dk = 0; dk < 2; ++dk) {
+    for (int dj = 0; dj < 2; ++dj) {
+      for (int di = 0; di < 2; ++di) {
+        const VoxelSdfShape::Sample& corner =
+            fd.corner_sample(i + di, j + dj, k + dk);
+        value_sum += corner.value;
+        gradient_sum += corner.gradient;
+        const Vector3<int> delta(di, dj, dk);
+        for (int a = 0; a < 3; ++a) {
+          if (delta[a] == 1) {
+            plus_sum[a] += corner.value;
+          } else {
+            minus_sum[a] += corner.value;
+          }
+        }
+        // The corner lattice really holds the field at true voxel corners.
+        EXPECT_EQ(
+            corner.value,
+            fd.EvaluateSdf(fd.corner_position(i + di, j + dj, k + dk)).value);
+      }
+    }
+  }
+  const double expected_value = 0.125 * value_sum;
+  const Vector3d expected_fd_gradient = 0.25 * (plus_sum - minus_sum) / h;
+
+  constexpr double kTol = 1e-14;
+  const VoxelSdfShape::Sample fd_sample = fd.cell_affine_sample(i, j, k);
+  EXPECT_NEAR(fd_sample.value, expected_value, kTol);
+  EXPECT_TRUE(CompareMatrices(fd_sample.gradient, expected_fd_gradient, kTol));
+
+  // Both gradient modes share the mean-value rule that shifts the roots; they
+  // differ only in the gradient.
+  const VoxelSdfShape::Sample analytic_sample =
+      analytic.cell_affine_sample(i, j, k);
+  EXPECT_NEAR(analytic_sample.value, expected_value, kTol);
+  EXPECT_TRUE(
+      CompareMatrices(analytic_sample.gradient, 0.125 * gradient_sum, kTol));
+  EXPECT_FALSE(
+      CompareMatrices(analytic_sample.gradient, expected_fd_gradient, kTol));
+
+  // Center sampling keeps returning the exact center sample.
+  const VoxelSdfGeometry center(Sphere(1.0), h, 10.0);
+  const VoxelSdfShape::Sample center_sample =
+      center.cell_affine_sample(i, j, k);
+  EXPECT_EQ(center_sample.value, center.sample(i, j, k).value);
+  EXPECT_TRUE(
+      CompareMatrices(center_sample.gradient, center.sample(i, j, k).gradient));
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, CornerReconstructionIsExactWhereAffine) {
+  // Inside this Box the signed distance is -(2 - |x|) wherever |x| dominates
+  // |y| and |z|, so it is exactly affine over the cell spanning x in [1, 1.5]
+  // with y and z in [0, 0.5]. An affine field must be reproduced exactly: the
+  // mean of the corner values is the center value and the central differences
+  // are the exact gradient.
+  constexpr double h = 0.5;
+  const VoxelSdfShape box(Box(4.0, 4.0, 4.0));
+  const VoxelSdfGeometry fd =
+      MakeCornerSampled(h, VoxelSdfCornerGradient::kFiniteDifference, box);
+  const VoxelSdfGeometry analytic =
+      MakeCornerSampled(h, VoxelSdfCornerGradient::kAnalyticAverage, box);
+  constexpr int i = 6;
+  constexpr int j = 4;
+  constexpr int k = 4;
+  const Vector3d center = fd.cell_center(i, j, k);
+  ASSERT_TRUE(CompareMatrices(center, Vector3d(1.25, 0.25, 0.25)));
+  const VoxelSdfShape::Sample exact = fd.EvaluateSdf(center);
+
+  constexpr double kTol = 1e-14;
+  for (const VoxelSdfGeometry* dut : {&fd, &analytic}) {
+    const VoxelSdfShape::Sample sample = dut->cell_affine_sample(i, j, k);
+    EXPECT_NEAR(sample.value, exact.value, kTol);
+    EXPECT_TRUE(CompareMatrices(sample.gradient, exact.gradient, kTol));
+  }
+}
+
+GTEST_TEST(VoxelSdfGeometryTest, CornerSamplingRejectsUnsupportedCombinations) {
+  const VoxelSdfShape box(Box(2.0, 2.0, 2.0));
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(box, 1.0, 1.0,
+                       VoxelSdfEvaluationMode::kStoredGridTrilinear,
+                       VoxelSdfExtractionMethod::kPlaneClip,
+                       VoxelSdfSamplingSite::kCellCorner,
+                       VoxelSdfCornerGradient::kFiniteDifference),
+      ".*requires primitive SDF evaluation for corner sampling.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(box, 1.0, 1.0, VoxelSdfEvaluationMode::kPrimitiveSdf,
+                       VoxelSdfExtractionMethod::kMarchingCubes,
+                       VoxelSdfSamplingSite::kCellCorner,
+                       VoxelSdfCornerGradient::kFiniteDifference),
+      ".*corner sampling only with plane-clip extraction.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(box, 1.0, 1.0, VoxelSdfEvaluationMode::kPrimitiveSdf,
+                       VoxelSdfExtractionMethod::kPlaneClip,
+                       static_cast<VoxelSdfSamplingSite>(-1),
+                       VoxelSdfCornerGradient::kFiniteDifference),
+      ".*sampling site.*invalid.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      VoxelSdfGeometry(box, 1.0, 1.0, VoxelSdfEvaluationMode::kPrimitiveSdf,
+                       VoxelSdfExtractionMethod::kPlaneClip,
+                       VoxelSdfSamplingSite::kCellCorner,
+                       static_cast<VoxelSdfCornerGradient>(-1)),
+      ".*corner gradient mode.*invalid.*");
+}
+
 }  // namespace
 }  // namespace hydroelastic
 }  // namespace internal

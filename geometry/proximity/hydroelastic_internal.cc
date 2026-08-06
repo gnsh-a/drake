@@ -317,6 +317,30 @@ class PositiveDouble : public Validator<double> {
   }
 };
 
+// The voxel-SDF selectors a compliant representation reads from proximity
+// properties. Each default reproduces the configuration that predates its
+// property, so geometry registered without them is unchanged.
+struct VoxelSdfSelectors {
+  VoxelSdfEvaluationMode evaluation_mode{VoxelSdfEvaluationMode::kPrimitiveSdf};
+  VoxelSdfExtractionMethod extraction_method{
+      VoxelSdfExtractionMethod::kPlaneClip};
+  VoxelSdfSamplingSite sampling_site{VoxelSdfSamplingSite::kCellCenter};
+  VoxelSdfCornerGradient corner_gradient{
+      VoxelSdfCornerGradient::kFiniteDifference};
+};
+
+VoxelSdfSelectors ReadVoxelSdfSelectors(const ProximityProperties& props) {
+  return VoxelSdfSelectors{
+      props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
+                                 VoxelSdfEvaluationMode::kPrimitiveSdf),
+      props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
+                                 VoxelSdfExtractionMethod::kPlaneClip),
+      props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfSamplingSite,
+                                 VoxelSdfSamplingSite::kCellCenter),
+      props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfCornerGradient,
+                                 VoxelSdfCornerGradient::kFiniteDifference)};
+}
+
 // Validator that extracts *non-negative doubles*, where a zero value is valid.
 // In case of missing property, a value of zero is returned.
 class NonNegativeDouble : public Validator<double> {
@@ -449,15 +473,11 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
     const double hydroelastic_modulus =
         validator.Extract(props, kHydroGroup, kElastic);
-    const VoxelSdfEvaluationMode evaluation_mode =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
-    const VoxelSdfExtractionMethod extraction_method =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
-                                   VoxelSdfExtractionMethod::kPlaneClip);
-    return CompliantGeometry(
-        VoxelSdfGeometry(sphere, voxel_width, hydroelastic_modulus,
-                         evaluation_mode, extraction_method));
+    const VoxelSdfSelectors selectors = ReadVoxelSdfSelectors(props);
+    return CompliantGeometry(VoxelSdfGeometry(
+        VoxelSdfShape(sphere), voxel_width, hydroelastic_modulus,
+        selectors.evaluation_mode, selectors.extraction_method,
+        selectors.sampling_site, selectors.corner_gradient));
   }
 
   const Sphere inflated_sphere(sphere.radius() + margin);
@@ -499,15 +519,11 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
     const double hydroelastic_modulus =
         validator.Extract(props, kHydroGroup, kElastic);
-    const VoxelSdfEvaluationMode evaluation_mode =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
-    const VoxelSdfExtractionMethod extraction_method =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
-                                   VoxelSdfExtractionMethod::kPlaneClip);
+    const VoxelSdfSelectors selectors = ReadVoxelSdfSelectors(props);
     return CompliantGeometry(
-        VoxelSdfGeometry(box, voxel_width, hydroelastic_modulus,
-                         evaluation_mode, extraction_method));
+        VoxelSdfGeometry(VoxelSdfShape(box), voxel_width, hydroelastic_modulus,
+                         selectors.evaluation_mode, selectors.extraction_method,
+                         selectors.sampling_site, selectors.corner_gradient));
   }
 
   // Define the shape of the "inflated" hydroelastic geometry to include the
@@ -546,15 +562,11 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
     const double hydroelastic_modulus =
         validator.Extract(props, kHydroGroup, kElastic);
-    const VoxelSdfEvaluationMode evaluation_mode =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
-    const VoxelSdfExtractionMethod extraction_method =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
-                                   VoxelSdfExtractionMethod::kPlaneClip);
-    return CompliantGeometry(
-        VoxelSdfGeometry(cylinder, voxel_width, hydroelastic_modulus,
-                         evaluation_mode, extraction_method));
+    const VoxelSdfSelectors selectors = ReadVoxelSdfSelectors(props);
+    return CompliantGeometry(VoxelSdfGeometry(
+        VoxelSdfShape(cylinder), voxel_width, hydroelastic_modulus,
+        selectors.evaluation_mode, selectors.extraction_method,
+        selectors.sampling_site, selectors.corner_gradient));
   }
 
   // Keep the legacy tetrahedral representation unchanged unless the caller
@@ -617,15 +629,11 @@ std::optional<CompliantGeometry> MakeCompliantRepresentation(
     const double voxel_width = validator.Extract(props, kHydroGroup, kRezHint);
     const double hydroelastic_modulus =
         validator.Extract(props, kHydroGroup, kElastic);
-    const VoxelSdfEvaluationMode evaluation_mode =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfEvaluationMode,
-                                   VoxelSdfEvaluationMode::kPrimitiveSdf);
-    const VoxelSdfExtractionMethod extraction_method =
-        props.GetPropertyOrDefault(kHydroGroup, kVoxelSdfExtractionMethod,
-                                   VoxelSdfExtractionMethod::kPlaneClip);
-    return CompliantGeometry(
-        VoxelSdfGeometry(ellipsoid, voxel_width, hydroelastic_modulus,
-                         evaluation_mode, extraction_method));
+    const VoxelSdfSelectors selectors = ReadVoxelSdfSelectors(props);
+    return CompliantGeometry(VoxelSdfGeometry(
+        VoxelSdfShape(ellipsoid), voxel_width, hydroelastic_modulus,
+        selectors.evaluation_mode, selectors.extraction_method,
+        selectors.sampling_site, selectors.corner_gradient));
   }
 
   // If nothing is said, let's go for the *cheap* tessellation strategy.

@@ -23,6 +23,8 @@ const char* const kMargin = "margin";
 const char* const kCompliantRepresentation = "compliant_representation";
 const char* const kVoxelSdfEvaluationMode = "voxel_sdf_evaluation_mode";
 const char* const kVoxelSdfExtractionMethod = "voxel_sdf_extraction_method";
+const char* const kVoxelSdfSamplingSite = "voxel_sdf_sampling_site";
+const char* const kVoxelSdfCornerGradient = "voxel_sdf_corner_gradient";
 
 namespace {
 
@@ -171,6 +173,24 @@ void ValidateVoxelSdfExtractionMethod(VoxelSdfExtractionMethod method) {
   throw std::logic_error("The voxel SDF extraction method is invalid");
 }
 
+void ValidateVoxelSdfSamplingSite(VoxelSdfSamplingSite site) {
+  switch (site) {
+    case VoxelSdfSamplingSite::kCellCenter:
+    case VoxelSdfSamplingSite::kCellCorner:
+      return;
+  }
+  throw std::logic_error("The voxel SDF sampling site is invalid");
+}
+
+void ValidateVoxelSdfCornerGradient(VoxelSdfCornerGradient gradient) {
+  switch (gradient) {
+    case VoxelSdfCornerGradient::kFiniteDifference:
+    case VoxelSdfCornerGradient::kAnalyticAverage:
+      return;
+  }
+  throw std::logic_error("The voxel SDF corner gradient mode is invalid");
+}
+
 void ValidateVoxelSdfProperties(double voxel_width,
                                 double hydroelastic_modulus) {
   if (!(voxel_width > 0.0 && std::isfinite(voxel_width))) {
@@ -190,6 +210,8 @@ void AddVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     std::optional<VoxelSdfEvaluationMode> evaluation_mode,
     std::optional<VoxelSdfExtractionMethod> extraction_method,
+    std::optional<VoxelSdfSamplingSite> sampling_site,
+    std::optional<VoxelSdfCornerGradient> corner_gradient,
     ProximityProperties* properties) {
   DRAKE_DEMAND(properties != nullptr);
   // Validate all caller values before adding any property so a bad request
@@ -201,6 +223,12 @@ void AddVoxelSdfProperties(
   if (extraction_method.has_value()) {
     ValidateVoxelSdfExtractionMethod(*extraction_method);
   }
+  if (sampling_site.has_value()) {
+    ValidateVoxelSdfSamplingSite(*sampling_site);
+  }
+  if (corner_gradient.has_value()) {
+    ValidateVoxelSdfCornerGradient(*corner_gradient);
+  }
   const VoxelSdfEvaluationMode effective_evaluation =
       evaluation_mode.value_or(VoxelSdfEvaluationMode::kPrimitiveSdf);
   const VoxelSdfExtractionMethod effective_extraction =
@@ -210,6 +238,17 @@ void AddVoxelSdfProperties(
     throw std::logic_error(
         "Marching-cubes voxel SDF extraction requires primitive SDF "
         "evaluation");
+  }
+  if (sampling_site.value_or(VoxelSdfSamplingSite::kCellCenter) ==
+      VoxelSdfSamplingSite::kCellCorner) {
+    if (effective_evaluation != VoxelSdfEvaluationMode::kPrimitiveSdf) {
+      throw std::logic_error(
+          "Corner voxel SDF sampling requires primitive SDF evaluation");
+    }
+    if (effective_extraction != VoxelSdfExtractionMethod::kPlaneClip) {
+      throw std::logic_error(
+          "Corner voxel SDF sampling requires plane-clip extraction");
+    }
   }
   properties->AddProperty(internal::kHydroGroup, internal::kRezHint,
                           voxel_width);
@@ -230,6 +269,15 @@ void AddVoxelSdfProperties(
                             internal::kVoxelSdfExtractionMethod,
                             *extraction_method);
   }
+  if (sampling_site.has_value()) {
+    properties->AddProperty(internal::kHydroGroup,
+                            internal::kVoxelSdfSamplingSite, *sampling_site);
+  }
+  if (corner_gradient.has_value()) {
+    properties->AddProperty(internal::kHydroGroup,
+                            internal::kVoxelSdfCornerGradient,
+                            *corner_gradient);
+  }
 }
 }  // namespace
 
@@ -246,14 +294,14 @@ void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     ProximityProperties* properties) {
   AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, std::nullopt,
-                        std::nullopt, properties);
+                        std::nullopt, std::nullopt, std::nullopt, properties);
 }
 
 void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     VoxelSdfEvaluationMode mode, ProximityProperties* properties) {
   AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, mode, std::nullopt,
-                        properties);
+                        std::nullopt, std::nullopt, properties);
 }
 
 void AddCompliantHydroelasticVoxelSdfProperties(
@@ -262,7 +310,19 @@ void AddCompliantHydroelasticVoxelSdfProperties(
     VoxelSdfExtractionMethod extraction_method,
     ProximityProperties* properties) {
   AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, evaluation_mode,
-                        extraction_method, properties);
+                        extraction_method, std::nullopt, std::nullopt,
+                        properties);
+}
+
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    VoxelSdfEvaluationMode evaluation_mode,
+    VoxelSdfExtractionMethod extraction_method,
+    VoxelSdfSamplingSite sampling_site, VoxelSdfCornerGradient corner_gradient,
+    ProximityProperties* properties) {
+  AddVoxelSdfProperties(voxel_width, hydroelastic_modulus, evaluation_mode,
+                        extraction_method, sampling_site, corner_gradient,
+                        properties);
 }
 
 void AddCompliantHydroelasticPropertiesForHalfSpace(

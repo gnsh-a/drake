@@ -77,6 +77,10 @@ extern const char* const
     kVoxelSdfEvaluationMode;  ///< Voxel SDF evaluation mode property name.
 extern const char* const
     kVoxelSdfExtractionMethod;  ///< Voxel SDF extraction method property name.
+extern const char* const
+    kVoxelSdfSamplingSite;  ///< Voxel SDF sampling site property name.
+extern const char* const
+    kVoxelSdfCornerGradient;  ///< Voxel SDF corner gradient property name.
 
 //@}
 
@@ -119,6 +123,37 @@ enum class VoxelSdfExtractionMethod {
   kPlaneClip,
   /** Extracts the zero set of the pressure difference with marching cubes. */
   kMarchingCubes,
+};
+
+/** Selects where the registration-time samples that define each voxel's affine
+ branch are taken. Only plane-clip extraction of a primitive-evaluated field
+ consumes this selection; marching cubes reads its own dual grid of sample
+ centers. */
+enum class VoxelSdfSamplingSite {
+  /** Samples the signed-distance field at each voxel center. Plane clipping
+   then loses most of the contact patch when the equal-pressure interface lies
+   within roughly 0.013 h of a voxel face (measured at h/R = 0.1; the window
+   grows with h). */
+  kCellCenter,
+  /** Samples voxel corners and reconstructs each cell's center value and
+   gradient from its eight corners. The mean corner value carries a curvature
+   bias that is one-signed across the grid, which moves that failure window
+   rather than removing it: the window shifts to roughly +0.014 h past each
+   voxel face at h/R = 0.1 and +0.03 h at h/R = 0.2, keeping about the same
+   width and peak severity. Choose this to make the exactly-aligned,
+   symmetric configuration accurate; it is not a general fix for
+   boundary-aligned holes. Use VoxelSdfExtractionMethod::kMarchingCubes for a
+   surface with no such window. */
+  kCellCorner,
+};
+
+/** Selects how a corner-sampled voxel reconstructs its center gradient. */
+enum class VoxelSdfCornerGradient {
+  /** Face-averaged central differences of the eight corner values, making the
+   reconstruction the trilinear interpolant at the cell center. */
+  kFiniteDifference,
+  /** Mean of the eight exact corner gradients. */
+  kAnalyticAverage,
 };
 
 /**
@@ -252,6 +287,35 @@ void AddCompliantHydroelasticVoxelSdfProperties(
     double voxel_width, double hydroelastic_modulus,
     VoxelSdfEvaluationMode evaluation_mode,
     VoxelSdfExtractionMethod extraction_method,
+    ProximityProperties* properties);
+
+/** Adds properties that opt a Box, Cylinder, Ellipsoid, or Sphere into the
+ voxel signed-distance-field compliant hydroelastic representation with the
+ selected evaluation mode, surface-extraction method, and affine sampling site.
+
+ Corner sampling requires VoxelSdfEvaluationMode::kPrimitiveSdf and
+ VoxelSdfExtractionMethod::kPlaneClip; every other combination throws during
+ geometry registration rather than silently ignoring the request. Only Sphere
+ and Ellipsoid consume the reconstructed sample: Box and Cylinder build exact
+ analytic affine pieces, so corner sampling leaves them unchanged.
+
+ @param voxel_width          The width of each cubic voxel, in meters.
+ @param hydroelastic_modulus A multiplier that maps penetration to pressure.
+ @param evaluation_mode      The contact-query evaluation mode.
+ @param extraction_method    The contact-surface extraction method.
+ @param sampling_site        Where each cell's affine sample is taken.
+ @param corner_gradient      How a corner-sampled cell builds its gradient.
+ @param[in,out] properties   The properties will be added to this property set.
+ @throws std::exception      If either numeric parameter is not finite and
+                             strictly positive, any enum value is invalid, or
+                             `properties` already has a property this function
+                             would add.
+ @pre `properties` is not nullptr. */
+void AddCompliantHydroelasticVoxelSdfProperties(
+    double voxel_width, double hydroelastic_modulus,
+    VoxelSdfEvaluationMode evaluation_mode,
+    VoxelSdfExtractionMethod extraction_method,
+    VoxelSdfSamplingSite sampling_site, VoxelSdfCornerGradient corner_gradient,
     ProximityProperties* properties);
 
 /** Compliant half spaces are handled as a special case; they do not get

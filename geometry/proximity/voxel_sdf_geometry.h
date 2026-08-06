@@ -68,6 +68,12 @@ class VoxelSdfGeometry {
                    double hydroelastic_modulus,
                    VoxelSdfEvaluationMode evaluation_mode,
                    VoxelSdfExtractionMethod extraction_method);
+  VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
+                   double hydroelastic_modulus,
+                   VoxelSdfEvaluationMode evaluation_mode,
+                   VoxelSdfExtractionMethod extraction_method,
+                   VoxelSdfSamplingSite sampling_site,
+                   VoxelSdfCornerGradient corner_gradient);
 
   // Value semantics deep-copy registered samples; moving transfers their
   // ownership. Neither operation creates shared backing storage.
@@ -81,8 +87,14 @@ class VoxelSdfGeometry {
   VoxelSdfExtractionMethod extraction_method() const {
     return extraction_method_;
   }
+  VoxelSdfSamplingSite sampling_site() const { return sampling_site_; }
+  VoxelSdfCornerGradient corner_gradient() const { return corner_gradient_; }
   const Vector3<int>& cell_counts() const { return cell_counts_; }
   const Vector3<int>& storage_counts() const { return storage_counts_; }
+  /* Returns the per-axis count of corner-lattice nodes, which is one more than
+   the cell count on each axis. The lattice is empty unless this geometry was
+   registered with VoxelSdfSamplingSite::kCellCorner. */
+  const Vector3<int>& corner_counts() const { return corner_counts_; }
   Vector3<int> mc_node_counts() const { return mc_node_counts_; }
   Vector3<int> mc_cube_counts() const { return mc_cube_counts_; }
   const Vector3<double>& lower_cell_boundary() const {
@@ -105,6 +117,28 @@ class VoxelSdfGeometry {
   Vector3<double> stored_sample_center(int i, int j, int k) const;
   const SdfSample& stored_sample(int i, int j, int k) const;
 
+  /* Returns the position of an original-voxel corner, expressed in the geometry
+   frame. Corner (i, j, k) is the low corner of cell (i, j, k), so corner
+   (0, 0, 0) is the lower core boundary and corner cell_counts() is the upper
+   one. Unlike mc_node_position(), these are true voxel corners rather than
+   dual-grid nodes. */
+  Vector3<double> corner_position(int i, int j, int k) const;
+
+  /* Returns the corner sample. Only available for kCellCorner geometry. */
+  const SdfSample& corner_sample(int i, int j, int k) const;
+
+  /* Returns the sample that defines cell (i, j, k)'s affine branch. Under
+   kCellCenter this is sample(); under kCellCorner it is reconstructed from the
+   cell's eight corner samples: the value is their mean and the gradient follows
+   corner_gradient(). The mean value differs from the center value by a
+   curvature-dependent bias that is one-signed across the whole grid. That bias
+   is what fills the boundary-aligned holes plane clipping otherwise leaves: it
+   moves every cell's root the same way, so one cell owns each fiber instead of
+   both disowning it. It relocates rather than removes the failure, because a
+   single affine function per cell still cannot agree with its neighbor across a
+   shared face; see VoxelSdfSamplingSite for the measured window. */
+  SdfSample cell_affine_sample(int i, int j, int k) const;
+
   /* Interpolates the stored scalar field and returns the derivative of that
    same interpolant. Returns no value outside the stored sample-center domain.
    This is only available for kStoredGridTrilinear geometry. */
@@ -119,6 +153,7 @@ class VoxelSdfGeometry {
   static constexpr int kStoredGridPadding = 2;
 
   size_t storage_linear_index(int i, int j, int k) const;
+  size_t corner_linear_index(int i, int j, int k) const;
   int core_storage_offset() const;
   int mc_storage_offset() const;
 
@@ -131,8 +166,12 @@ class VoxelSdfGeometry {
       VoxelSdfEvaluationMode::kPrimitiveSdf};
   VoxelSdfExtractionMethod extraction_method_{
       VoxelSdfExtractionMethod::kPlaneClip};
+  VoxelSdfSamplingSite sampling_site_{VoxelSdfSamplingSite::kCellCenter};
+  VoxelSdfCornerGradient corner_gradient_{
+      VoxelSdfCornerGradient::kFiniteDifference};
   Vector3<int> cell_counts_;
   Vector3<int> storage_counts_;
+  Vector3<int> corner_counts_{Vector3<int>::Zero()};
   Vector3<int> mc_node_counts_;
   Vector3<int> mc_cube_counts_;
   Vector3<double> lower_cell_boundary_;
@@ -144,6 +183,12 @@ class VoxelSdfGeometry {
   // size, a hydroelastic margin, Context state, or query scratch. Samples are
   // indexed with x varying fastest, then y, then z.
   std::vector<SdfSample> samples_;
+  // The corner lattice is separate registered storage, populated only under
+  // kCellCorner. Keeping it apart from samples_ leaves the center lattice, and
+  // therefore the dual-grid marching-cubes view, byte-for-byte unchanged. It
+  // needs no padding: cell (i, j, k) reads corners i..i+1 on each axis, all of
+  // which lie inside the core lattice. Indexed like samples_.
+  std::vector<SdfSample> corner_samples_;
 };
 
 }  // namespace hydroelastic

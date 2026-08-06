@@ -74,6 +74,28 @@ void ValidateExtractionMethod(VoxelSdfExtractionMethod method,
       fmt::format("The {} voxel SDF extraction method is invalid", shape_name));
 }
 
+void ValidateSamplingSite(VoxelSdfSamplingSite site,
+                          std::string_view shape_name) {
+  switch (site) {
+    case VoxelSdfSamplingSite::kCellCenter:
+    case VoxelSdfSamplingSite::kCellCorner:
+      return;
+  }
+  throw std::logic_error(
+      fmt::format("The {} voxel SDF sampling site is invalid", shape_name));
+}
+
+void ValidateCornerGradient(VoxelSdfCornerGradient gradient,
+                            std::string_view shape_name) {
+  switch (gradient) {
+    case VoxelSdfCornerGradient::kFiniteDifference:
+    case VoxelSdfCornerGradient::kAnalyticAverage:
+      return;
+  }
+  throw std::logic_error(fmt::format(
+      "The {} voxel SDF corner gradient mode is invalid", shape_name));
+}
+
 }  // namespace
 
 VoxelSdfGeometry::VoxelSdfGeometry(const Box& box, double voxel_width,
@@ -170,16 +192,48 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
                                    double hydroelastic_modulus,
                                    VoxelSdfEvaluationMode evaluation_mode,
                                    VoxelSdfExtractionMethod extraction_method)
+    : VoxelSdfGeometry(std::move(shape), voxel_width, hydroelastic_modulus,
+                       evaluation_mode, extraction_method,
+                       VoxelSdfSamplingSite::kCellCenter,
+                       VoxelSdfCornerGradient::kFiniteDifference) {}
+
+VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
+                                   double hydroelastic_modulus,
+                                   VoxelSdfEvaluationMode evaluation_mode,
+                                   VoxelSdfExtractionMethod extraction_method,
+                                   VoxelSdfSamplingSite sampling_site,
+                                   VoxelSdfCornerGradient corner_gradient)
     : shape_(std::move(shape)),
       voxel_width_(voxel_width),
       hydroelastic_modulus_(hydroelastic_modulus),
       characteristic_length_(shape_.characteristic_length()),
       pressure_scale_(0.0),
       evaluation_mode_(evaluation_mode),
-      extraction_method_(extraction_method) {
+      extraction_method_(extraction_method),
+      sampling_site_(sampling_site),
+      corner_gradient_(corner_gradient) {
   const std::string shape_name(shape_.shape_name());
   ValidateEvaluationMode(evaluation_mode_, shape_name);
   ValidateExtractionMethod(extraction_method_, shape_name);
+  ValidateSamplingSite(sampling_site_, shape_name);
+  ValidateCornerGradient(corner_gradient_, shape_name);
+  if (sampling_site_ == VoxelSdfSamplingSite::kCellCorner &&
+      evaluation_mode_ != VoxelSdfEvaluationMode::kPrimitiveSdf) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF requires primitive SDF evaluation for corner "
+        "sampling",
+        shape_name));
+  }
+  if (sampling_site_ == VoxelSdfSamplingSite::kCellCorner &&
+      extraction_method_ != VoxelSdfExtractionMethod::kPlaneClip) {
+    // Marching cubes reads the dual grid of sample centers, never the affine
+    // cell sample, so pairing it with corner sampling would silently change
+    // nothing. Rejecting the combination keeps that from reading as support.
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF supports corner sampling only with plane-clip "
+        "extraction",
+        shape_name));
+  }
   if (evaluation_mode_ == VoxelSdfEvaluationMode::kStoredGridTrilinear &&
       extraction_method_ == VoxelSdfExtractionMethod::kMarchingCubes) {
     throw std::logic_error(fmt::format(
@@ -296,6 +350,57 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
       }
     }
   }
+
+  if (sampling_site_ != VoxelSdfSamplingSite::kCellCorner) return;
+
+  // The corner lattice closes the original cells: corner (0, 0, 0) sits on the
+  // lower core boundary and corner cell_counts() on the upper one, so it needs
+  // one more node per axis than there are cells and no padding at all.
+  for (int a = 0; a < 3; ++a) {
+    corner_counts_[a] =
+        CheckedCount(cell_counts_[a], 1, "corner", shape_name, a);
+  }
+  size_t corner_count =
+      CheckedMultiply(static_cast<size_t>(corner_counts_[0]),
+                      static_cast<size_t>(corner_counts_[1]), shape_name);
+  corner_count = CheckedMultiply(
+      corner_count, static_cast<size_t>(corner_counts_[2]), shape_name);
+  if (corner_count > corner_samples_.max_size()) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF corner count cannot be represented by a vector",
+        shape_name));
+  }
+  try {
+    corner_samples_.resize(corner_count);
+  } catch (const std::bad_alloc&) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF corner samples cannot be allocated safely",
+        shape_name));
+  } catch (const std::length_error&) {
+    throw std::logic_error(fmt::format(
+        "The {} voxel SDF corner samples cannot be allocated safely",
+        shape_name));
+  }
+
+  for (int k = 0; k < corner_counts_[2]; ++k) {
+    for (int j = 0; j < corner_counts_[1]; ++j) {
+      for (int i = 0; i < corner_counts_[0]; ++i) {
+        const Vector3<double> corner = corner_position(i, j, k);
+        if (!corner.allFinite()) {
+          throw std::logic_error(
+              fmt::format("The {} voxel SDF corner ({}, {}, {}) is not finite",
+                          shape_name, i, j, k));
+        }
+        const SdfSample sdf = shape_.Evaluate(corner);
+        if (!sdf.gradient.allFinite() || !std::isfinite(sdf.value)) {
+          throw std::logic_error(fmt::format(
+              "The {} voxel SDF corner sample ({}, {}, {}) is not finite",
+              shape_name, i, j, k));
+        }
+        corner_samples_[corner_linear_index(i, j, k)] = sdf;
+      }
+    }
+  }
 }
 
 Vector3<double> VoxelSdfGeometry::cell_center(int i, int j, int k) const {
@@ -351,6 +456,74 @@ Vector3<double> VoxelSdfGeometry::stored_sample_center(int i, int j,
 const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::stored_sample(
     int i, int j, int k) const {
   return samples_[storage_linear_index(i, j, k)];
+}
+
+Vector3<double> VoxelSdfGeometry::corner_position(int i, int j, int k) const {
+  DRAKE_DEMAND(sampling_site_ == VoxelSdfSamplingSite::kCellCorner);
+  DRAKE_DEMAND(i >= 0 && i <= cell_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j <= cell_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k <= cell_counts_[2]);
+  // Fused multiply-add for the same reason as stored_sample_center(); the
+  // corner lattice differs only by dropping that function's half-cell shift.
+  return Vector3<double>(
+      std::fma(voxel_width_, static_cast<double>(i), lower_cell_boundary_[0]),
+      std::fma(voxel_width_, static_cast<double>(j), lower_cell_boundary_[1]),
+      std::fma(voxel_width_, static_cast<double>(k), lower_cell_boundary_[2]));
+}
+
+const VoxelSdfGeometry::SdfSample& VoxelSdfGeometry::corner_sample(
+    int i, int j, int k) const {
+  DRAKE_DEMAND(sampling_site_ == VoxelSdfSamplingSite::kCellCorner);
+  return corner_samples_[corner_linear_index(i, j, k)];
+}
+
+VoxelSdfGeometry::SdfSample VoxelSdfGeometry::cell_affine_sample(int i, int j,
+                                                                 int k) const {
+  DRAKE_DEMAND(i >= 0 && i < cell_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < cell_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < cell_counts_[2]);
+  if (sampling_site_ == VoxelSdfSamplingSite::kCellCenter) {
+    return sample(i, j, k);
+  }
+
+  // Corner (di, dj, dk) of this cell, with di the fastest index.
+  std::array<double, 8> values{};
+  Vector3<double> gradient_sum = Vector3<double>::Zero();
+  for (int dk = 0; dk < 2; ++dk) {
+    for (int dj = 0; dj < 2; ++dj) {
+      for (int di = 0; di < 2; ++di) {
+        const SdfSample& corner = corner_sample(i + di, j + dj, k + dk);
+        values[4 * dk + 2 * dj + di] = corner.value;
+        gradient_sum += corner.gradient;
+      }
+    }
+  }
+  double value_sum = 0.0;
+  for (const double value : values) value_sum += value;
+  const double value = 0.125 * value_sum;
+
+  if (corner_gradient_ == VoxelSdfCornerGradient::kAnalyticAverage) {
+    return SdfSample{value, 0.125 * gradient_sum};
+  }
+  // Face-averaged central differences. Together with the mean value above this
+  // is exactly the trilinear interpolant of the corner values evaluated at the
+  // cell center, so a field that is affine over the cell is reproduced exactly.
+  const auto axis_difference = [&values](int stride) {
+    double plus = 0.0;
+    double minus = 0.0;
+    for (int index = 0; index < 8; ++index) {
+      if ((index / stride) % 2 == 1) {
+        plus += values[index];
+      } else {
+        minus += values[index];
+      }
+    }
+    return 0.25 * (plus - minus);
+  };
+  const Vector3<double> gradient(axis_difference(1) / voxel_width_,
+                                 axis_difference(2) / voxel_width_,
+                                 axis_difference(4) / voxel_width_);
+  return SdfSample{value, gradient};
 }
 
 std::optional<VoxelSdfGeometry::SdfSample> VoxelSdfGeometry::InterpolateSdf(
@@ -437,7 +610,11 @@ std::vector<VoxelSdfGeometry::SdfBranch> VoxelSdfGeometry::CalcCellSdfBranches(
     // discarded during sampling, so this mode uses one local affine branch.
     return {SdfBranch{sample(i, j, k), {}, 0, false}};
   }
-  return shape_.CalcAffineBranches(cell_center(i, j, k), sample(i, j, k));
+  // Under kCellCorner this recenters the shape's affine pieces on the corner
+  // reconstruction instead of the exact center sample; piecewise-affine shapes
+  // build exact pieces and ignore it either way.
+  return shape_.CalcAffineBranches(cell_center(i, j, k),
+                                   cell_affine_sample(i, j, k));
 }
 
 std::vector<VoxelSdfGeometry::SdfBranch> VoxelSdfGeometry::EvaluateSdfBranches(
@@ -453,6 +630,16 @@ size_t VoxelSdfGeometry::storage_linear_index(int i, int j, int k) const {
          static_cast<size_t>(storage_counts_[0]) *
              (static_cast<size_t>(j) +
               static_cast<size_t>(storage_counts_[1]) * static_cast<size_t>(k));
+}
+
+size_t VoxelSdfGeometry::corner_linear_index(int i, int j, int k) const {
+  DRAKE_DEMAND(i >= 0 && i < corner_counts_[0]);
+  DRAKE_DEMAND(j >= 0 && j < corner_counts_[1]);
+  DRAKE_DEMAND(k >= 0 && k < corner_counts_[2]);
+  return static_cast<size_t>(i) +
+         static_cast<size_t>(corner_counts_[0]) *
+             (static_cast<size_t>(j) +
+              static_cast<size_t>(corner_counts_[1]) * static_cast<size_t>(k));
 }
 
 int VoxelSdfGeometry::core_storage_offset() const {

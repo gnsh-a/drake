@@ -644,6 +644,72 @@ GTEST_TEST(VoxelSdfContactSurfaceTest, SphereBoxFaceBranchesCloseGaps) {
   ExpectNoCoincidentFaces(*surface);
 }
 
+GTEST_TEST(VoxelSdfContactSurfaceTest,
+           CornerSamplingClosesBoundaryAlignedHoles) {
+  // Equal unit spheres 1.8 apart put the exact equal-pressure interface on
+  // x = 0.9, which is exactly a voxel face of the h = 0.1 grid whose lower
+  // boundary is x = -1.0. Center sampling loses that whole band: each of the
+  // two voxels straddling the face puts its affine root just outside its own
+  // cell, so neither claims the fiber. Corner sampling replaces the center
+  // value with the mean of the eight corner values, whose curvature bias is
+  // one-signed across the grid, so both roots move the same way and exactly one
+  // voxel owns each fiber.
+  constexpr double radius = 1.0;
+  constexpr double modulus = 1.0e8;
+  constexpr double h = 0.1;
+  constexpr double separation = 1.8;
+  const RigidTransformd X_WB(Vector3d(separation, 0.0, 0.0));
+  const auto [id_A, id_B] = MakeOrderedGeometryIds();
+
+  auto make_corner = [](double width) {
+    return VoxelSdfGeometry(VoxelSdfShape(Sphere(radius)), width, modulus,
+                            VoxelSdfEvaluationMode::kPrimitiveSdf,
+                            VoxelSdfExtractionMethod::kPlaneClip,
+                            VoxelSdfSamplingSite::kCellCorner,
+                            VoxelSdfCornerGradient::kFiniteDifference);
+  };
+  const VoxelSdfGeometry center_A(Sphere(radius), h, modulus);
+  const VoxelSdfGeometry center_B(Sphere(radius), h, modulus);
+  const VoxelSdfGeometry corner_A = make_corner(h);
+  const VoxelSdfGeometry corner_B = make_corner(h);
+
+  const auto center = CalcVoxelSdfPolygonContact(center_A, RigidTransformd(),
+                                                 id_A, center_B, X_WB, id_B);
+  const auto corner = CalcVoxelSdfPolygonContact(corner_A, RigidTransformd(),
+                                                 id_A, corner_B, X_WB, id_B);
+  ASSERT_NE(center, nullptr);
+  ASSERT_NE(corner, nullptr);
+  ExpectSurfaceInvariants(*center, id_A, id_B);
+  ExpectSurfaceInvariants(*corner, id_A, id_B);
+
+  const double interface_x = 0.5 * separation;
+  const double disk_radius =
+      std::sqrt(radius * radius - interface_x * interface_x);
+  const double exact_area = M_PI * disk_radius * disk_radius;
+  // Center sampling recovers 87% of the disk; the rest is the hole band.
+  EXPECT_LT(center->total_area(), 0.90 * exact_area);
+  // Corner sampling recovers all of it, slightly overshooting because the same
+  // bias also pushes the rim outward.
+  EXPECT_GT(corner->total_area(), 0.98 * exact_area);
+  EXPECT_LT(corner->total_area(), 1.02 * exact_area);
+  // Filling the band leaves one polygon per column instead of fragments.
+  EXPECT_LT(corner->num_faces(), center->num_faces());
+  ExpectNoCoincidentFaces(*corner);
+
+  auto normal_force = [](const ContactSurface<double>& surface) {
+    double force = 0.0;
+    for (int f = 0; f < surface.num_faces(); ++f) {
+      const Vector3d centroid = surface.centroid(f);
+      force -= surface.poly_e_MN().EvaluateCartesian(f, centroid) *
+               surface.area(f) * surface.face_normal(f).x();
+    }
+    return force;
+  };
+  // The recovered band carries real pressure, so the normal force rises toward
+  // (and here just past) the tetrahedral reference.
+  EXPECT_GT(normal_force(*corner), 1.1 * normal_force(*center));
+}
+
 GTEST_TEST(VoxelSdfContactSurfaceTest, SharedVoxelBoundaryHasSingleOwner) {
   const VoxelSdfGeometry A(Box::MakeCube(2.0), 0.5, 100.0);
   const VoxelSdfGeometry B(Box::MakeCube(2.0), 0.5, 100.0);
