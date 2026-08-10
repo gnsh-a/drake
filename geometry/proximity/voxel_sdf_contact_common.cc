@@ -22,15 +22,14 @@ constexpr double kToleranceScale = 64.0;
 
 }  // namespace
 
-PressureFieldSample MakePressureField(
-    const VoxelSdfGeometry& geometry, const VoxelSdfShape::Sample& sample) {
+PressureFieldSample MakePressureField(const VoxelSdfGeometry& geometry,
+                                      const VoxelSdfShape::Sample& sample) {
   return PressureFieldSample{sample.value, sample.gradient,
                              geometry.pressure_scale(),
                              geometry.characteristic_length()};
 }
 
-double CalcSpatialTolerance(double voxel_width,
-                            double characteristic_length_A,
+double CalcSpatialTolerance(double voxel_width, double characteristic_length_A,
                             double characteristic_length_B) {
   return kToleranceScale * std::numeric_limits<double>::epsilon() *
          std::max(
@@ -89,8 +88,7 @@ void SortCounterClockwise(const Vector3d& normal,
   }
 }
 
-void RemoveNearDuplicates(double tolerance,
-                          std::vector<Vector3d>* vertices) {
+void RemoveNearDuplicates(double tolerance, std::vector<Vector3d>* vertices) {
   DRAKE_DEMAND(vertices != nullptr);
   const double tolerance_squared = tolerance * tolerance;
   std::vector<Vector3d> unique;
@@ -140,14 +138,18 @@ std::unique_ptr<ContactSurface<double>> FinalizeContactSurface(
 }
 
 template std::unique_ptr<ContactSurface<double>>
-FinalizeContactSurface<PolyMeshBuilder<double>>(
-    PolyMeshBuilder<double>, std::vector<Vector3d>, std::vector<Vector3d>,
-    const math::RigidTransformd&, GeometryId, GeometryId);
+FinalizeContactSurface<PolyMeshBuilder<double>>(PolyMeshBuilder<double>,
+                                                std::vector<Vector3d>,
+                                                std::vector<Vector3d>,
+                                                const math::RigidTransformd&,
+                                                GeometryId, GeometryId);
 
 template std::unique_ptr<ContactSurface<double>>
-FinalizeContactSurface<TriMeshBuilder<double>>(
-    TriMeshBuilder<double>, std::vector<Vector3d>, std::vector<Vector3d>,
-    const math::RigidTransformd&, GeometryId, GeometryId);
+FinalizeContactSurface<TriMeshBuilder<double>>(TriMeshBuilder<double>,
+                                               std::vector<Vector3d>,
+                                               std::vector<Vector3d>,
+                                               const math::RigidTransformd&,
+                                               GeometryId, GeometryId);
 
 }  // namespace hydroelastic
 }  // namespace internal

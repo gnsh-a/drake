@@ -26,15 +26,13 @@ struct PressureFieldSample {
 
 /* Combines `sample` with the immutable scalar data owned by `geometry`. This
  copies all values; the result retains no reference to registered geometry. */
-PressureFieldSample MakePressureField(
-    const VoxelSdfGeometry& geometry, const VoxelSdfShape::Sample& sample);
+PressureFieldSample MakePressureField(const VoxelSdfGeometry& geometry,
+                                      const VoxelSdfShape::Sample& sample);
 
-double CalcSpatialTolerance(double voxel_width,
-                            double characteristic_length_A,
+double CalcSpatialTolerance(double voxel_width, double characteristic_length_A,
                             double characteristic_length_B);
 
-Vector3<double> CalcCentroid(
-    const std::vector<Vector3<double>>& vertices);
+Vector3<double> CalcCentroid(const std::vector<Vector3<double>>& vertices);
 
 double CalcSignedArea(const std::vector<Vector3<double>>& vertices,
                       const Vector3<double>& normal);
@@ -51,8 +49,7 @@ void RemoveNearDuplicates(double tolerance,
  std::move and must not inspect it afterward. */
 template <typename Builder>
 std::unique_ptr<ContactSurface<double>> FinalizeContactSurface(
-    Builder builder_A,
-    std::vector<Vector3<double>> grad_p_A_A_per_face,
+    Builder builder_A, std::vector<Vector3<double>> grad_p_A_A_per_face,
     std::vector<Vector3<double>> grad_p_B_A_per_face,
     const math::RigidTransformd& X_WA, GeometryId id_A, GeometryId id_B);
 
