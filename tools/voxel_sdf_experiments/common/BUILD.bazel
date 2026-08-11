@@ -1,0 +1,96 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_googletest",
+    "drake_cc_library",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+drake_cc_library(
+    name = "reference",
+    srcs = ["reference.cc"],
+    hdrs = ["reference.h"],
+    deps = ["//common:essential"],
+)
+
+drake_cc_library(
+    name = "representation",
+    srcs = ["representation.cc"],
+    hdrs = ["representation.h"],
+    deps = [
+        "//geometry:proximity_properties",
+        "//geometry/query_results:contact_surface",
+    ],
+)
+
+drake_cc_library(
+    name = "surface_view",
+    srcs = ["surface_view.cc"],
+    hdrs = ["surface_view.h"],
+    deps = [
+        "//common:essential",
+        "//geometry/query_results:contact_surface",
+    ],
+)
+
+drake_cc_library(
+    name = "metrics",
+    srcs = ["metrics.cc"],
+    hdrs = ["metrics.h"],
+    deps = [
+        ":reference",
+        ":surface_view",
+        "//common:essential",
+    ],
+)
+
+drake_cc_library(
+    name = "emit",
+    srcs = ["emit.cc"],
+    hdrs = ["emit.h"],
+    deps = [":metrics"],
+)
+
+drake_cc_googletest(
+    name = "reference_test",
+    srcs = ["test/reference_test.cc"],
+    deps = [":reference"],
+)
+
+drake_cc_googletest(
+    name = "representation_test",
+    srcs = ["test/representation_test.cc"],
+    deps = [":representation"],
+)
+
+drake_cc_googletest(
+    name = "surface_view_test",
+    srcs = ["test/surface_view_test.cc"],
+    deps = [
+        ":surface_view",
+        "//geometry:geometry_ids",
+        "//geometry/proximity:mesh_field",
+        "//geometry/proximity:polygon_surface_mesh",
+        "//geometry/proximity:triangle_surface_mesh",
+        "//geometry/query_results:contact_surface",
+    ],
+)
+
+drake_cc_googletest(
+    name = "metrics_test",
+    srcs = ["test/metrics_test.cc"],
+    deps = [
+        ":metrics",
+        ":reference",
+        ":surface_view",
+    ],
+)
+
+drake_cc_googletest(
+    name = "emit_test",
+    srcs = ["test/emit_test.cc"],
+    deps = [":emit"],
+)
+
+add_lint_tests()

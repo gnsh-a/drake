@@ -1,0 +1,96 @@
+#pragma once
+
+#include <array>
+
+#include "drake/common/eigen_types.h"
+
+namespace drake {
+namespace tools {
+namespace voxel_sdf_experiments {
+
+/* Analytic reference for an axisymmetric frozen contact patch. The area is
+ projected onto the xy plane, matching normal-force integration. The centroid
+ is weighted by the true surface area. */
+class Reference {
+ public:
+  virtual ~Reference();
+
+  virtual double force() const = 0;
+  virtual double area() const = 0;
+  virtual double distance_to_surface(const Eigen::Vector3d& p_RQ) const = 0;
+  virtual double pressure_at(const Eigen::Vector3d& p_RQ) const = 0;
+  virtual double patch_radius() const = 0;
+  virtual double peak_pressure() const = 0;
+  virtual Eigen::Vector3d centroid() const = 0;
+  virtual Eigen::Vector3d normal() const = 0;
+};
+
+/* Exact reference for two equal-radius spheres. The lower sphere is centered
+ at the reference origin and the upper sphere is centered on +z. With equal
+ moduli, the equilibrium surface is the flat mid-plane. Unequal moduli are
+ also supported; the exact equilibrium surface is then axisymmetric. */
+class AnalyticPlane final : public Reference {
+ public:
+  AnalyticPlane(double radius, double penetration, double modulus_lower,
+                double modulus_upper);
+
+  double force() const final;
+  double area() const final;
+  double distance_to_surface(const Eigen::Vector3d& p_RQ) const final;
+  double pressure_at(const Eigen::Vector3d& p_RQ) const final;
+  double patch_radius() const final;
+  double peak_pressure() const final;
+  Eigen::Vector3d centroid() const final;
+  Eigen::Vector3d normal() const final;
+
+ private:
+  double RadiusSquaredAtPressureFraction(double fraction) const;
+  double HeightAtPressureFraction(double fraction) const;
+  double PressureFractionAtRadiusSquared(double radius_squared) const;
+
+  double radius_{};
+  double penetration_{};
+  double modulus_lower_{};
+  double modulus_upper_{};
+  double center_distance_{};
+  double peak_pressure_{};
+  std::array<double, 5> radius_squared_coefficients_{};
+  std::array<double, 3> height_coefficients_{};
+};
+
+/* Exact reference for a sphere above a box whose smallest half-width equals
+ the sphere radius. The box is centered at the reference origin with its top
+ face at +radius; the sphere center lies on +z. With equal moduli, the
+ equilibrium surface is a paraboloid. Unequal moduli are also supported. */
+class AnalyticParaboloid final : public Reference {
+ public:
+  AnalyticParaboloid(double radius, double penetration, double sphere_modulus,
+                     double box_modulus);
+
+  double force() const final;
+  double area() const final;
+  double distance_to_surface(const Eigen::Vector3d& p_RQ) const final;
+  double pressure_at(const Eigen::Vector3d& p_RQ) const final;
+  double patch_radius() const final;
+  double peak_pressure() const final;
+  Eigen::Vector3d centroid() const final;
+  Eigen::Vector3d normal() const final;
+
+ private:
+  double RadiusSquaredAtPressureFraction(double fraction) const;
+  double HeightAtPressureFraction(double fraction) const;
+  double PressureFractionAtRadiusSquared(double radius_squared) const;
+
+  double radius_{};
+  double penetration_{};
+  double sphere_modulus_{};
+  double box_modulus_{};
+  double sphere_center_height_{};
+  double peak_pressure_{};
+  std::array<double, 3> radius_squared_coefficients_{};
+  std::array<double, 2> height_coefficients_{};
+};
+
+}  // namespace voxel_sdf_experiments
+}  // namespace tools
+}  // namespace drake

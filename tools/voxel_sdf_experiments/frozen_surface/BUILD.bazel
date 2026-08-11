@@ -1,0 +1,55 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_googletest",
+    "drake_cc_library",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+exports_files([
+    "analyze.py",
+    "run_ladder.py",
+])
+
+drake_cc_library(
+    name = "frozen_surface_lib",
+    srcs = ["frozen_surface.cc"],
+    hdrs = ["frozen_surface.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//common:essential",
+        "//geometry:geometry_frame",
+        "//geometry:geometry_instance",
+        "//geometry:kinematics_vector",
+        "//geometry:scene_graph",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//systems/framework:context",
+        "//tools/voxel_sdf_experiments/common:metrics",
+        "//tools/voxel_sdf_experiments/common:reference",
+        "//tools/voxel_sdf_experiments/common:representation",
+        "//tools/voxel_sdf_experiments/common:surface_view",
+    ],
+)
+
+drake_cc_binary(
+    name = "frozen_surface",
+    srcs = ["frozen_surface_main.cc"],
+    deps = [
+        ":frozen_surface_lib",
+        "//tools/voxel_sdf_experiments/common:emit",
+        "//tools/voxel_sdf_experiments/common:representation",
+        "@gflags",
+    ],
+)
+
+drake_cc_googletest(
+    name = "frozen_surface_test",
+    srcs = ["test/frozen_surface_test.cc"],
+    deps = [":frozen_surface_lib"],
+)
+
+add_lint_tests()

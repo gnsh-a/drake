@@ -30,3 +30,6 @@
 
 # User-specified configuration
 /user.bazelrc
+
+# Local planning notes, never tracked.
+/plan/
