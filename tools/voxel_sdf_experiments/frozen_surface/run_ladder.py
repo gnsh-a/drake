@@ -27,11 +27,11 @@ def _run_one(
     scene: str,
     representation: str,
     h_mm: float,
+    meshes: bool,
 ) -> tuple[pathlib.Path, str]:
     h_m = h_mm / 1000.0
-    output = output_dir / (
-        f"{scene}__{representation}__h_{_rung_label(h_mm)}mm.csv"
-    )
+    stem = f"{scene}__{representation}__h_{_rung_label(h_mm)}mm"
+    output = output_dir / f"{stem}.csv"
     command = [
         str(binary),
         f"--scene={scene}",
@@ -41,6 +41,8 @@ def _run_one(
         f"--tet_resolution_hint={h_m:.17g}",
         f"--output={output}",
     ]
+    if meshes:
+        command.append(f"--mesh_output={output_dir / 'meshes' / stem}.vtk")
     completed = subprocess.run(
         command,
         check=True,
@@ -78,6 +80,12 @@ def main() -> int:
         default=4,
         help="Maximum concurrent frozen-query subprocesses.",
     )
+    parser.add_argument(
+        "--meshes",
+        action="store_true",
+        help="Also write each contact surface as VTK POLYDATA under "
+        "OUTPUT_DIR/meshes, for ParaView or PyVista.",
+    )
     args = parser.parse_args()
 
     binary = args.binary.resolve()
@@ -86,6 +94,8 @@ def main() -> int:
     if args.jobs < 1:
         parser.error("--jobs must be positive")
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.meshes:
+        (args.output_dir / "meshes").mkdir(parents=True, exist_ok=True)
 
     rungs = (
         (ALL_RUNGS_MM[0], ALL_RUNGS_MM[-1])
@@ -112,6 +122,7 @@ def main() -> int:
                 scene,
                 representation,
                 h_mm,
+                args.meshes,
             ): (scene, representation, h_mm)
             for scene, representation, h_mm in runs
         }
