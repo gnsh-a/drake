@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <memory>
 
 #include <gtest/gtest.h>
 
@@ -87,12 +88,44 @@ void RunClosedFormGate() {
   }
 }
 
+template <typename ReferenceType>
+void RunEquilibriumRoundTripGate() {
+  constexpr double kRadius = 0.1;
+  constexpr double kModulus = 1.0e5;
+  const ReferenceFactory factory = [=](double penetration) {
+    return std::make_unique<ReferenceType>(kRadius, penetration, kModulus,
+                                           kModulus);
+  };
+  const std::array<double, 5> source_penetrations{0.0005, 0.002, 0.01, 0.0199,
+                                                  0.08};
+  double previous_penetration = 0.0;
+  double previous_mass = 0.0;
+  for (const double source_penetration : source_penetrations) {
+    const double target_force = ForceAtPenetration(factory, source_penetration);
+    const double mass = target_force / 9.81;
+    const double penetration =
+        EquilibriumPenetration(factory, mass * 9.81, kRadius);
+    EXPECT_NEAR(ForceAtPenetration(factory, penetration), target_force,
+                1e-12 * target_force)
+        << "mass=" << mass;
+    EXPECT_GT(penetration, previous_penetration);
+    EXPECT_GT(mass, previous_mass);
+    previous_penetration = penetration;
+    previous_mass = mass;
+  }
+}
+
 GTEST_TEST(ReferenceTest, AnalyticPlaneClosedFormGate) {
   RunClosedFormGate<AnalyticPlane>();
 }
 
 GTEST_TEST(ReferenceTest, AnalyticParaboloidClosedFormGate) {
   RunClosedFormGate<AnalyticParaboloid>();
+}
+
+GTEST_TEST(ReferenceTest, EquilibriumPenetrationRoundTripAndMonotonicity) {
+  RunEquilibriumRoundTripGate<AnalyticPlane>();
+  RunEquilibriumRoundTripGate<AnalyticParaboloid>();
 }
 
 GTEST_TEST(ReferenceTest, EqualModulusSurfaceShapes) {

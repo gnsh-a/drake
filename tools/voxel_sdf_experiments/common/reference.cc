@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -160,6 +161,62 @@ double SurfaceCentroidHeight(
 }  // namespace
 
 Reference::~Reference() = default;
+
+double ForceAtPenetration(const ReferenceFactory& factory, double penetration) {
+  if (!factory) {
+    throw std::logic_error("Reference factory must not be empty");
+  }
+  ThrowUnlessFinitePositive(penetration, "penetration");
+  const std::unique_ptr<Reference> reference = factory(penetration);
+  if (reference == nullptr) {
+    throw std::logic_error("Reference factory returned null");
+  }
+  const double force = reference->force();
+  if (!(std::isfinite(force) && force > 0.0)) {
+    throw std::logic_error("Reference force must be finite and positive");
+  }
+  return force;
+}
+
+double EquilibriumPenetration(const ReferenceFactory& factory,
+                              double target_force, double radius) {
+  if (!factory) {
+    throw std::logic_error("Reference factory must not be empty");
+  }
+  ThrowUnlessFinitePositive(target_force, "target_force");
+  ThrowUnlessFinitePositive(radius, "radius");
+
+  double lower = 0.0;
+  double upper = 0.0;
+  constexpr int kBracketIntervals = 512;
+  for (int i = 1; i <= kBracketIntervals; ++i) {
+    const double fraction = static_cast<double>(i) / kBracketIntervals;
+    const double candidate = i == kBracketIntervals
+                                 ? std::nextafter(2.0 * radius, 0.0)
+                                 : 2.0 * radius * fraction;
+    if (ForceAtPenetration(factory, candidate) >= target_force) {
+      upper = candidate;
+      break;
+    }
+    lower = candidate;
+  }
+  if (upper == 0.0) {
+    throw std::logic_error(
+        "target_force has no reference root below the "
+        "diameter");
+  }
+
+  for (int iteration = 0; iteration < 128; ++iteration) {
+    const double middle = 0.5 * (lower + upper);
+    if (middle == lower || middle == upper) break;
+    if (ForceAtPenetration(factory, middle) < target_force) {
+      lower = middle;
+    } else {
+      upper = middle;
+    }
+  }
+  return 0.5 * (lower + upper);
+}
 
 AnalyticPlane::AnalyticPlane(double radius, double penetration,
                              double modulus_lower, double modulus_upper)

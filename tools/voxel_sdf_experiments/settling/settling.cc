@@ -1,0 +1,562 @@
+#include "drake/tools/voxel_sdf_experiments/settling/settling.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <fmt/format.h>
+
+#include "drake/geometry/proximity_properties.h"
+#include "drake/geometry/query_results/contact_surface.h"
+#include "drake/geometry/shape_specification.h"
+#include "drake/math/rigid_transform.h"
+#include "drake/math/roll_pitch_yaw.h"
+#include "drake/multibody/math/spatial_algebra.h"
+#include "drake/multibody/plant/contact_results.h"
+#include "drake/multibody/plant/coulomb_friction.h"
+#include "drake/multibody/plant/multibody_plant.h"
+#include "drake/multibody/tree/spatial_inertia.h"
+#include "drake/systems/analysis/simulator.h"
+#include "drake/systems/framework/context.h"
+#include "drake/systems/framework/diagram_builder.h"
+#include "drake/systems/framework/event_status.h"
+#include "drake/tools/voxel_sdf_experiments/common/components.h"
+#include "drake/tools/voxel_sdf_experiments/common/emit.h"
+#include "drake/tools/voxel_sdf_experiments/common/mesh_export.h"
+#include "drake/tools/voxel_sdf_experiments/common/reference.h"
+#include "drake/tools/voxel_sdf_experiments/common/surface_view.h"
+
+namespace drake {
+namespace tools {
+namespace voxel_sdf_experiments {
+namespace {
+
+using Eigen::Vector3d;
+using geometry::Box;
+using geometry::ContactSurface;
+using geometry::ProximityProperties;
+using geometry::Sphere;
+using math::RigidTransformd;
+using multibody::AddMultibodyPlantSceneGraph;
+using multibody::ContactModel;
+using multibody::ContactResults;
+using multibody::CoulombFriction;
+using multibody::DiscreteContactApproximation;
+using multibody::MultibodyPlant;
+using multibody::RigidBody;
+using multibody::SpatialInertia;
+using multibody::SpatialVelocity;
+using systems::Context;
+using systems::DiagramBuilder;
+using systems::EventStatus;
+using systems::Simulator;
+
+constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr double kGravity = 9.81;
+constexpr double kRadius = 0.1;
+const Vector3d kBoxHalfWidths{0.2, 0.2, 0.1};
+/* The default load is the one whose analytic equilibrium lands here. The value
+ is 0.08 / 3, chosen so the equal-pressure plane never lands on a voxel cell
+ boundary: the affine kernel degenerates when delta = 2 i h and marching cubes,
+ which samples the dual grid, when delta = (2 i + 1) h, so any delta that is an
+ integer multiple of h is degenerate for one of them. Since delta / h is 8/3
+ times a power of two over a dyadic ladder, and a 1/3 offset is invariant under
+ halving h, this one value stays 1/3 of a cell off a boundary at every rung.
+ A boundary-aligned penetration is a deliberate robustness axis, not a default;
+ see contact_plane_voxel_phase in the emitted row. */
+constexpr double kDefaultEquilibriumPenetration = 0.08 / 3.0;
+constexpr double kDegreesToRadians = kPi / 180.0;
+constexpr std::string_view kSettlingCsvHeader =
+    "schema_version,git_commit,git_dirty,scene,representation,mass_kg,"
+    "voxel_width_m,tet_resolution_hint_m,hydroelastic_modulus_pa,"
+    "initial_gap_m,time_step_s,dissipation_s_m,duration_input_s,"
+    "settling_window_input_s,grid_roll_deg,grid_pitch_deg,grid_yaw_deg,"
+    "weight_N,analytic_equilibrium_penetration_m,contact_stiffness_N_m,"
+    "natural_period_s,duration_s,settling_window_s,patch_radius_m,"
+    "elements_across_patch,contact_plane_voxel_phase,"
+    "equilibrium_penetration_m,penetration_error_m,"
+    "penetration_relative_error,mean_support_force_N,"
+    "mean_support_force_relative_error,penetration_span_m,"
+    "max_abs_axial_velocity_m_s,max_lateral_offset_m,"
+    "max_angular_speed_rad_s,mean_faces,mean_contact_area_m2,"
+    "largest_component_area_fraction,max_penetration_m,"
+    "first_contact_time_s,first_contact_loss_time_s,steps,wall_time_s,"
+    "axial_velocity_settled,penetration_span_settled,settled";
+constexpr std::string_view kTrajectoryCsvHeader =
+    "time_s,penetration_m,support_force_N,axial_velocity_m_s,"
+    "lateral_offset_m,angular_speed_rad_s,faces,contact_area_m2,"
+    "largest_component_area_fraction,contact";
+
+void ThrowUnlessFinitePositive(double value, std::string_view name) {
+  if (!(std::isfinite(value) && value > 0.0)) {
+    throw std::logic_error(std::string(name) +
+                           " must be finite and strictly positive");
+  }
+}
+
+void ThrowUnlessFiniteNonnegative(double value, std::string_view name) {
+  if (!(std::isfinite(value) && value >= 0.0)) {
+    throw std::logic_error(std::string(name) +
+                           " must be finite and nonnegative");
+  }
+}
+
+ReferenceFactory MakeReferenceFactory(SettlingScene scene, double modulus) {
+  if (scene == SettlingScene::kSphereSphere) {
+    return [modulus](double penetration) {
+      return std::make_unique<AnalyticPlane>(kRadius, penetration, modulus,
+                                             modulus);
+    };
+  }
+  return [modulus](double penetration) {
+    return std::make_unique<AnalyticParaboloid>(kRadius, penetration, modulus,
+                                                modulus);
+  };
+}
+
+void ValidateConfig(const SettlingConfig& config) {
+  ThrowUnlessFinitePositive(config.mass, "mass");
+  ThrowUnlessFinitePositive(config.voxel_width, "voxel_width");
+  ThrowUnlessFinitePositive(config.tet_resolution_hint, "tet_resolution_hint");
+  ThrowUnlessFinitePositive(config.hydroelastic_modulus,
+                            "hydroelastic_modulus");
+  ThrowUnlessFiniteNonnegative(config.initial_gap, "initial_gap");
+  ThrowUnlessFinitePositive(config.time_step, "time_step");
+  ThrowUnlessFiniteNonnegative(config.dissipation, "dissipation");
+  ThrowUnlessFiniteNonnegative(config.duration, "duration");
+  ThrowUnlessFiniteNonnegative(config.settling_window, "settling_window");
+  if (!config.grid_rpy_deg.allFinite()) {
+    throw std::logic_error("grid RPY angles must be finite");
+  }
+}
+
+ProximityProperties MakeContactProperties(const SettlingConfig& config) {
+  const double resolution = config.representation == Representation::kTet
+                                ? config.tet_resolution_hint
+                                : config.voxel_width;
+  ProximityProperties properties = MakeProperties(
+      config.representation, resolution, config.hydroelastic_modulus);
+  geometry::AddContactMaterial(config.dissipation, {},
+                               CoulombFriction<double>(0.0, 0.0), &properties);
+  return properties;
+}
+
+double CalcLargestComponentAreaFraction(const SurfaceView& surface,
+                                        double total_area) {
+  if (surface.faces.empty()) return 0.0;
+  const std::vector<int> component_ids =
+      CalcFaceComponentIds(surface, DefaultComponentTolerance(surface));
+  std::vector<double> component_areas(surface.faces.size(), 0.0);
+  for (int face = 0; face < std::ssize(surface.faces); ++face) {
+    component_areas[component_ids[face]] += surface.faces[face].area;
+  }
+  return *std::max_element(component_areas.begin(), component_areas.end()) /
+         total_area;
+}
+
+struct Sample {
+  double time{};
+  double penetration{};
+  double support_force{};
+  double axial_velocity{};
+  double lateral_offset{};
+  double angular_speed{};
+  int faces{};
+  double contact_area{};
+  double largest_component_area_fraction{};
+  bool contact{};
+};
+
+struct SettledAccumulator {
+  int64_t samples{};
+  double penetration_sum{};
+  double penetration_min{std::numeric_limits<double>::infinity()};
+  double penetration_max{-std::numeric_limits<double>::infinity()};
+  double support_force_sum{};
+  double max_abs_axial_velocity{};
+  double max_lateral_offset{};
+  double max_angular_speed{};
+  double faces_sum{};
+  double contact_area_sum{};
+  double largest_component_area_fraction_sum{};
+
+  void Add(const Sample& sample) {
+    ++samples;
+    penetration_sum += sample.penetration;
+    penetration_min = std::min(penetration_min, sample.penetration);
+    penetration_max = std::max(penetration_max, sample.penetration);
+    support_force_sum += sample.support_force;
+    max_abs_axial_velocity =
+        std::max(max_abs_axial_velocity, std::abs(sample.axial_velocity));
+    max_lateral_offset = std::max(max_lateral_offset, sample.lateral_offset);
+    max_angular_speed = std::max(max_angular_speed, sample.angular_speed);
+    faces_sum += sample.faces;
+    contact_area_sum += sample.contact_area;
+    largest_component_area_fraction_sum +=
+        sample.largest_component_area_fraction;
+  }
+};
+
+class TrajectoryWriter final {
+ public:
+  explicit TrajectoryWriter(const std::filesystem::path& path) {
+    if (path.empty()) return;
+    if (path.has_parent_path()) {
+      std::filesystem::create_directories(path.parent_path());
+    }
+    output_.open(path);
+    if (!output_) {
+      throw std::runtime_error("Unable to create trajectory CSV '" +
+                               path.string() + "'");
+    }
+    output_ << std::setprecision(std::numeric_limits<double>::max_digits10);
+    output_ << kTrajectoryCsvHeader << '\n';
+  }
+
+  void Write(const Sample& sample) {
+    if (!output_.is_open()) return;
+    output_ << sample.time << ',' << sample.penetration << ','
+            << sample.support_force << ',' << sample.axial_velocity << ','
+            << sample.lateral_offset << ',' << sample.angular_speed << ','
+            << sample.faces << ',' << sample.contact_area << ','
+            << sample.largest_component_area_fraction << ','
+            << (sample.contact ? "true" : "false") << '\n';
+    if (!output_) {
+      throw std::runtime_error("Failed while writing trajectory CSV");
+    }
+  }
+
+ private:
+  std::ofstream output_;
+};
+
+void WriteOptional(std::ostream& output, const std::optional<double>& value) {
+  if (value.has_value()) output << *value;
+}
+
+GitProvenance ReadGitProvenanceOrUnknown() {
+  try {
+    return ReadGitProvenance();
+  } catch (const std::exception&) {
+    // Bazel tests execute from a runfiles tree rather than a Git checkout.
+    return {.commit = "unknown", .dirty = true};
+  }
+}
+
+void WriteSettlingCsv(const std::filesystem::path& path,
+                      const SettlingConfig& config,
+                      const SettlingResult& result) {
+  if (path.empty()) return;
+  if (path.has_parent_path()) {
+    std::filesystem::create_directories(path.parent_path());
+  }
+  std::ofstream output(path);
+  if (!output) {
+    throw std::runtime_error("Unable to create summary CSV '" + path.string() +
+                             "'");
+  }
+  output << std::setprecision(std::numeric_limits<double>::max_digits10);
+  const GitProvenance provenance = ReadGitProvenanceOrUnknown();
+  const SettlingDerived& derived = result.derived;
+  output << kSettlingCsvHeader << '\n';
+  output << "1," << provenance.commit << ','
+         << (provenance.dirty ? "true" : "false") << ','
+         << to_string(config.scene) << ',' << to_string(config.representation)
+         << ',' << config.mass << ',' << config.voxel_width << ','
+         << config.tet_resolution_hint << ',' << config.hydroelastic_modulus
+         << ',' << config.initial_gap << ',' << config.time_step << ','
+         << config.dissipation << ',' << config.duration << ','
+         << config.settling_window << ',' << config.grid_rpy_deg.x() << ','
+         << config.grid_rpy_deg.y() << ',' << config.grid_rpy_deg.z() << ','
+         << derived.weight << ',' << derived.analytic_equilibrium_penetration
+         << ',' << derived.contact_stiffness << ',' << derived.natural_period
+         << ',' << derived.duration << ',' << derived.settling_window << ','
+         << derived.patch_radius << ',' << derived.elements_across_patch << ','
+         << derived.contact_plane_voxel_phase << ','
+         << result.equilibrium_penetration << ',' << result.penetration_error
+         << ',' << result.penetration_relative_error << ','
+         << result.mean_support_force << ','
+         << result.mean_support_force_relative_error << ','
+         << result.penetration_span << ',' << result.max_abs_axial_velocity
+         << ',' << result.max_lateral_offset << ',' << result.max_angular_speed
+         << ',' << result.mean_faces << ',' << result.mean_contact_area << ','
+         << result.largest_component_area_fraction << ','
+         << result.max_penetration << ',';
+  WriteOptional(output, result.first_contact_time);
+  output << ',';
+  WriteOptional(output, result.first_contact_loss_time);
+  output << ',' << result.steps << ',' << result.wall_time << ','
+         << (result.axial_velocity_settled ? "true" : "false") << ','
+         << (result.penetration_span_settled ? "true" : "false") << ','
+         << (result.settled ? "true" : "false") << '\n';
+  if (!output) {
+    throw std::runtime_error("Failed while writing summary CSV '" +
+                             path.string() + "'");
+  }
+}
+
+}  // namespace
+
+SettlingScene ParseSettlingScene(std::string_view value) {
+  if (value == "sphere_sphere") return SettlingScene::kSphereSphere;
+  if (value == "sphere_box") return SettlingScene::kSphereBox;
+  throw std::logic_error("Unknown scene '" + std::string(value) +
+                         "'; expected sphere_sphere or sphere_box");
+}
+
+std::string_view to_string(SettlingScene scene) {
+  switch (scene) {
+    case SettlingScene::kSphereSphere:
+      return "sphere_sphere";
+    case SettlingScene::kSphereBox:
+      return "sphere_box";
+  }
+  throw std::logic_error("Invalid SettlingScene value");
+}
+
+double DefaultSettlingMass(SettlingScene scene, double hydroelastic_modulus) {
+  ThrowUnlessFinitePositive(hydroelastic_modulus, "hydroelastic_modulus");
+  return ForceAtPenetration(MakeReferenceFactory(scene, hydroelastic_modulus),
+                            kDefaultEquilibriumPenetration) /
+         kGravity;
+}
+
+SettlingDerived CalcSettlingDerived(const SettlingConfig& config) {
+  ValidateConfig(config);
+  SettlingDerived result;
+  result.weight = config.mass * kGravity;
+  const ReferenceFactory factory =
+      MakeReferenceFactory(config.scene, config.hydroelastic_modulus);
+  result.analytic_equilibrium_penetration =
+      EquilibriumPenetration(factory, result.weight, kRadius);
+  const double penetration = result.analytic_equilibrium_penetration;
+  const double x = kRadius - penetration / 2.0;
+  result.contact_stiffness =
+      kPi * config.hydroelastic_modulus * x * penetration / (2.0 * kRadius);
+  result.natural_period =
+      2.0 * kPi * std::sqrt(config.mass / result.contact_stiffness);
+  result.duration =
+      config.duration == 0.0 ? 15.0 * result.natural_period : config.duration;
+  result.settling_window = config.settling_window == 0.0
+                               ? 1.25 * result.natural_period
+                               : config.settling_window;
+  if (!(result.settling_window <= result.duration)) {
+    throw std::logic_error("settling_window must not exceed duration");
+  }
+  result.patch_radius =
+      std::sqrt(kRadius * penetration - penetration * penetration / 4.0);
+  const double resolution = config.representation == Representation::kTet
+                                ? config.tet_resolution_hint
+                                : config.voxel_width;
+  result.elements_across_patch = 2.0 * result.patch_radius / resolution;
+  if (config.representation == Representation::kTet) {
+    result.contact_plane_voxel_phase = std::numeric_limits<double>::quiet_NaN();
+  } else {
+    double boundary_coordinate = penetration / (2.0 * config.voxel_width);
+    if (config.representation == Representation::kMarchingCubes) {
+      boundary_coordinate -= 0.5;
+    }
+    result.contact_plane_voxel_phase = std::remainder(boundary_coordinate, 1.0);
+  }
+  return result;
+}
+
+std::string_view SettlingCsvHeader() {
+  return kSettlingCsvHeader;
+}
+
+SettlingResult RunSettling(const SettlingConfig& config) {
+  const SettlingDerived derived = CalcSettlingDerived(config);
+
+  DiagramBuilder<double> builder;
+  MultibodyPlant<double>& plant =
+      AddMultibodyPlantSceneGraph(&builder, config.time_step).plant;
+  plant.set_contact_model(ContactModel::kHydroelastic);
+  plant.set_discrete_contact_approximation(
+      DiscreteContactApproximation::kLagged);
+  plant.set_contact_surface_representation(
+      SurfaceTypeFor(config.representation));
+  plant.SetUseSampledOutputPorts(false);
+  plant.mutable_gravity_field().set_gravity_vector(-kGravity *
+                                                   Vector3d::UnitZ());
+
+  const SpatialInertia<double> free_inertia =
+      SpatialInertia<double>::SolidSphereWithMass(config.mass, kRadius);
+  const RigidBody<double>& free_body =
+      plant.AddRigidBody("free_sphere", free_inertia);
+  const math::RollPitchYawd grid_rpy(
+      kDegreesToRadians * config.grid_rpy_deg.x(),
+      kDegreesToRadians * config.grid_rpy_deg.y(),
+      kDegreesToRadians * config.grid_rpy_deg.z());
+  const RigidTransformd X_BG(grid_rpy, Vector3d::Zero());
+  const Sphere sphere(kRadius);
+  // Register the moving sphere first. For equal-resolution voxel pairs, its
+  // lower GeometryId makes its body-fixed grid the traversed host grid.
+  plant.RegisterCollisionGeometry(free_body, X_BG, sphere, "free_sphere",
+                                  MakeContactProperties(config));
+  if (config.scene == SettlingScene::kSphereSphere) {
+    plant.RegisterCollisionGeometry(plant.world_body(), RigidTransformd(),
+                                    sphere, "anchored_sphere",
+                                    MakeContactProperties(config));
+  } else {
+    const Box box(2.0 * kBoxHalfWidths.x(), 2.0 * kBoxHalfWidths.y(),
+                  2.0 * kBoxHalfWidths.z());
+    plant.RegisterCollisionGeometry(plant.world_body(), RigidTransformd(), box,
+                                    "anchored_box",
+                                    MakeContactProperties(config));
+  }
+  plant.Finalize();
+  if (plant.num_positions() != 7 || plant.num_velocities() != 6) {
+    throw std::runtime_error("The settling sphere must retain all six DOF");
+  }
+
+  std::unique_ptr<systems::Diagram<double>> diagram = builder.Build();
+  std::unique_ptr<Context<double>> diagram_context =
+      diagram->CreateDefaultContext();
+  Context<double>& plant_context =
+      diagram->GetMutableSubsystemContext(plant, diagram_context.get());
+  plant.SetFreeBodyPose(
+      &plant_context, free_body,
+      RigidTransformd(Vector3d(0.0, 0.0, 2.0 * kRadius + config.initial_gap)));
+  plant.SetFreeBodySpatialVelocity(&plant_context, free_body,
+                                   SpatialVelocity<double>::Zero());
+
+  TrajectoryWriter trajectory_writer(config.trajectory);
+  SettledAccumulator settled;
+  std::optional<double> first_contact_time;
+  std::optional<double> first_contact_loss_time;
+  double max_penetration = 0.0;
+  const double settled_start = derived.duration - derived.settling_window;
+
+  Simulator<double> simulator(*diagram, std::move(diagram_context));
+  simulator.set_target_realtime_rate(0.0);
+  simulator.set_monitor([&](const Context<double>& root_context) {
+    const Context<double>& current_plant_context =
+        plant.GetMyContextFromRoot(root_context);
+    const RigidTransformd& X_WB =
+        free_body.EvalPoseInWorld(current_plant_context);
+    const SpatialVelocity<double>& V_WB =
+        free_body.EvalSpatialVelocityInWorld(current_plant_context);
+    Sample sample;
+    sample.time = root_context.get_time();
+    sample.penetration = 2.0 * kRadius - X_WB.translation().z();
+    sample.axial_velocity = V_WB.translational().z();
+    sample.lateral_offset = X_WB.translation().head<2>().norm();
+    sample.angular_speed = V_WB.rotational().norm();
+    const bool in_settled_window =
+        sample.time + 0.5 * config.time_step >= settled_start;
+
+    const ContactResults<double>& contacts =
+        plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+            current_plant_context);
+    if (contacts.num_point_pair_contacts() != 0) {
+      throw std::runtime_error(
+          "Strict hydroelastic settling unexpectedly produced point contact");
+    }
+    if (contacts.num_hydroelastic_contacts() > 1) {
+      throw std::runtime_error("Expected at most one hydroelastic contact");
+    }
+    if (contacts.num_hydroelastic_contacts() == 1) {
+      sample.contact = true;
+      const auto& contact = contacts.hydroelastic_contact_info(0);
+      sample.support_force = std::abs(contact.F_Ac_W().translational().z());
+      const ContactSurface<double>& surface = contact.contact_surface();
+      const bool expect_triangle =
+          config.representation == Representation::kMarchingCubes;
+      if (surface.is_triangle() != expect_triangle) {
+        throw std::runtime_error(
+            "Contact surface type did not match the representation");
+      }
+      if (in_settled_window || !config.trajectory.empty()) {
+        const SurfaceView view = MakeSurfaceView(surface);
+        sample.faces = view.faces.size();
+        for (const Face& face : view.faces) sample.contact_area += face.area;
+        sample.largest_component_area_fraction =
+            CalcLargestComponentAreaFraction(view, sample.contact_area);
+      }
+    }
+
+    if (sample.contact && !first_contact_time.has_value()) {
+      first_contact_time = sample.time;
+    } else if (!sample.contact && first_contact_time.has_value() &&
+               !first_contact_loss_time.has_value()) {
+      first_contact_loss_time = sample.time;
+    }
+    max_penetration = std::max(max_penetration, sample.penetration);
+    if (in_settled_window) settled.Add(sample);
+    trajectory_writer.Write(sample);
+    return EventStatus::Succeeded();
+  });
+
+  const auto wall_start = std::chrono::steady_clock::now();
+  simulator.Initialize();
+  simulator.ResetStatistics();
+  simulator.AdvanceTo(derived.duration);
+  const double wall_time = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - wall_start)
+                               .count();
+  if (settled.samples == 0) {
+    throw std::runtime_error("The settled window contained no samples");
+  }
+
+  SettlingResult result;
+  result.derived = derived;
+  result.equilibrium_penetration = settled.penetration_sum / settled.samples;
+  result.penetration_error =
+      result.equilibrium_penetration - derived.analytic_equilibrium_penetration;
+  result.penetration_relative_error =
+      result.penetration_error / derived.analytic_equilibrium_penetration;
+  result.mean_support_force = settled.support_force_sum / settled.samples;
+  result.mean_support_force_relative_error =
+      (result.mean_support_force - derived.weight) / derived.weight;
+  result.penetration_span = settled.penetration_max - settled.penetration_min;
+  result.max_abs_axial_velocity = settled.max_abs_axial_velocity;
+  result.max_lateral_offset = settled.max_lateral_offset;
+  result.max_angular_speed = settled.max_angular_speed;
+  result.mean_faces = settled.faces_sum / settled.samples;
+  result.mean_contact_area = settled.contact_area_sum / settled.samples;
+  result.largest_component_area_fraction =
+      settled.largest_component_area_fraction_sum / settled.samples;
+  result.max_penetration = max_penetration;
+  result.first_contact_time = first_contact_time;
+  result.first_contact_loss_time = first_contact_loss_time;
+  result.steps = simulator.get_num_steps_taken();
+  result.wall_time = wall_time;
+  result.axial_velocity_settled = result.max_abs_axial_velocity < 1.0e-3;
+  result.penetration_span_settled = result.penetration_span < 1.0e-4;
+  result.settled =
+      result.axial_velocity_settled && result.penetration_span_settled;
+
+  if (!config.mesh_output.empty()) {
+    const Context<double>& final_plant_context =
+        plant.GetMyContextFromRoot(simulator.get_context());
+    const ContactResults<double>& final_contacts =
+        plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+            final_plant_context);
+    if (final_contacts.num_hydroelastic_contacts() != 1) {
+      throw std::runtime_error(
+          "Cannot write a settled mesh because the run ended without contact");
+    }
+    const SurfaceView final_surface = MakeSurfaceView(
+        final_contacts.hydroelastic_contact_info(0).contact_surface());
+    WriteSurfaceVtk(
+        config.mesh_output, final_surface,
+        fmt::format("{} {} settled h={}", to_string(config.scene),
+                    to_string(config.representation), config.voxel_width));
+  }
+  WriteSettlingCsv(config.output, config, result);
+  return result;
+}
+
+}  // namespace voxel_sdf_experiments
+}  // namespace tools
+}  // namespace drake

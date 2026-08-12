@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <functional>
+#include <memory>
 
 #include "drake/common/eigen_types.h"
 
@@ -24,6 +26,21 @@ class Reference {
   virtual Eigen::Vector3d centroid() const = 0;
   virtual Eigen::Vector3d normal() const = 0;
 };
+
+/* Builds an analytic reference at the requested penetration. Callers capture
+ scene-specific dimensions and moduli, leaving penetration as the independent
+ variable for load inversion. */
+using ReferenceFactory =
+    std::function<std::unique_ptr<Reference>(double penetration)>;
+
+/* Evaluates the reference load at `penetration`. */
+double ForceAtPenetration(const ReferenceFactory& factory, double penetration);
+
+/* Returns the unique penetration in (0, 2 * radius) whose reference load is
+ `target_force`. Reference::force() must be monotone increasing over that
+ interval. */
+double EquilibriumPenetration(const ReferenceFactory& factory,
+                              double target_force, double radius);
 
 /* Exact reference for two equal-radius spheres. The lower sphere is centered
  at the reference origin and the upper sphere is centered on +z. With equal
