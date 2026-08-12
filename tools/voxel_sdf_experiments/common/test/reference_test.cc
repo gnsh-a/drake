@@ -128,6 +128,45 @@ GTEST_TEST(ReferenceTest, EquilibriumPenetrationRoundTripAndMonotonicity) {
   RunEquilibriumRoundTripGate<AnalyticParaboloid>();
 }
 
+/* The equal-sphere stiffness has a closed form, pi E x delta / (2 R) with
+ x = R - delta / 2, which pins the central difference exactly. The paraboloid
+ has no such simple form here, so it is checked for self-consistency against a
+ much wider difference step, and for being stiffer than the plane at equal
+ penetration. The sphere-box scene carries roughly 1.85x the load and stiffness
+ of the equal-sphere scene at this operating point, which is precisely why one
+ shared analytic expression cannot serve both. */
+GTEST_TEST(ReferenceTest, StiffnessMatchesClosedFormAndIsSceneSpecific) {
+  constexpr double kRadius = 0.1;
+  constexpr double kModulus = 1.0e5;
+  const ReferenceFactory plane = [=](double penetration) {
+    return std::make_unique<AnalyticPlane>(kRadius, penetration, kModulus,
+                                           kModulus);
+  };
+  const ReferenceFactory paraboloid = [=](double penetration) {
+    return std::make_unique<AnalyticParaboloid>(kRadius, penetration, kModulus,
+                                                kModulus);
+  };
+  for (const double penetration : {0.002, 0.0199, 0.08 / 3.0, 0.08}) {
+    const double x = kRadius - penetration / 2.0;
+    const double expected = kPi * kModulus * x * penetration / (2.0 * kRadius);
+    const double plane_stiffness = StiffnessAtPenetration(plane, penetration);
+    EXPECT_NEAR(plane_stiffness, expected, 1e-8 * expected)
+        << "penetration=" << penetration;
+
+    const double wide = 1.0e-3 * penetration;
+    const double reference_slope =
+        (ForceAtPenetration(paraboloid, penetration + wide) -
+         ForceAtPenetration(paraboloid, penetration - wide)) /
+        (2.0 * wide);
+    const double paraboloid_stiffness =
+        StiffnessAtPenetration(paraboloid, penetration);
+    EXPECT_NEAR(paraboloid_stiffness, reference_slope, 1e-5 * reference_slope)
+        << "penetration=" << penetration;
+    EXPECT_GT(paraboloid_stiffness, plane_stiffness)
+        << "penetration=" << penetration;
+  }
+}
+
 GTEST_TEST(ReferenceTest, EqualModulusSurfaceShapes) {
   constexpr double kRadius = 0.1;
   constexpr double kPenetration = 0.02;

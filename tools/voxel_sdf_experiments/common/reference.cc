@@ -218,6 +218,22 @@ double EquilibriumPenetration(const ReferenceFactory& factory,
   return 0.5 * (lower + upper);
 }
 
+double StiffnessAtPenetration(const ReferenceFactory& factory,
+                              double penetration) {
+  ThrowUnlessFinitePositive(penetration, "penetration");
+  /* A relative step keeps the balance between truncation and roundoff fixed
+   across operating points. At 1e-6 the central difference is accurate to well
+   under 1e-9 relative for these smooth loads. */
+  const double step = 1.0e-6 * penetration;
+  const double upper = ForceAtPenetration(factory, penetration + step);
+  const double lower = ForceAtPenetration(factory, penetration - step);
+  const double stiffness = (upper - lower) / (2.0 * step);
+  if (!(std::isfinite(stiffness) && stiffness > 0.0)) {
+    throw std::logic_error("Reference stiffness must be finite and positive");
+  }
+  return stiffness;
+}
+
 AnalyticPlane::AnalyticPlane(double radius, double penetration,
                              double modulus_lower, double modulus_upper)
     : radius_(radius),

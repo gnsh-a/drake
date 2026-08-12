@@ -42,6 +42,18 @@ double ForceAtPenetration(const ReferenceFactory& factory, double penetration);
 double EquilibriumPenetration(const ReferenceFactory& factory,
                               double target_force, double radius);
 
+/* Returns the contact stiffness dF/d(penetration) at `penetration`, by central
+ difference on the reference load.
+
+ This is deliberately numeric rather than closed form. The closed-form stiffness
+ differs per scene -- for two equal spheres it is pi E x delta / (2 R) with
+ x = R - delta / 2, but the sphere-box paraboloid is roughly 1.85x stiffer at
+ the same penetration -- so a single analytic expression silently misreports
+ every scene but one. Differencing Reference::force() stays correct for whatever
+ reference it is handed. */
+double StiffnessAtPenetration(const ReferenceFactory& factory,
+                              double penetration);
+
 /* Exact reference for two equal-radius spheres. The lower sphere is centered
  at the reference origin and the upper sphere is centered on +z. With equal
  moduli, the equilibrium surface is the flat mid-plane. Unequal moduli are

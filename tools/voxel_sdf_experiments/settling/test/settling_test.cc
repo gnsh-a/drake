@@ -29,14 +29,25 @@ GTEST_TEST(SettlingTest, AutoDerivationUsesMassAndSceneReference) {
     config.mass = DefaultSettlingMass(scene, config.hydroelastic_modulus);
     const SettlingDerived derived = CalcSettlingDerived(config);
     EXPECT_NEAR(derived.analytic_equilibrium_penetration, 0.08 / 3.0, 2e-15);
+
+    /* The equal-sphere closed form pins sphere_sphere exactly. It must NOT be
+     applied to sphere_box: the paraboloid is measurably stiffer at the same
+     penetration, and using one expression for both understated sphere_box's
+     stiffness by 1.85x, which inflated its auto duration by 36%. */
     const double x = 0.1 - derived.analytic_equilibrium_penetration / 2.0;
-    const double expected_stiffness = kPi * config.hydroelastic_modulus * x *
-                                      derived.analytic_equilibrium_penetration /
-                                      0.2;
-    EXPECT_NEAR(derived.contact_stiffness, expected_stiffness,
-                1e-14 * expected_stiffness);
+    const double equal_sphere_stiffness =
+        kPi * config.hydroelastic_modulus * x *
+        derived.analytic_equilibrium_penetration / 0.2;
+    if (scene == SettlingScene::kSphereSphere) {
+      EXPECT_NEAR(derived.contact_stiffness, equal_sphere_stiffness,
+                  1e-8 * equal_sphere_stiffness);
+    } else {
+      EXPECT_GT(derived.contact_stiffness, 1.8 * equal_sphere_stiffness);
+      EXPECT_LT(derived.contact_stiffness, 1.9 * equal_sphere_stiffness);
+    }
+
     const double expected_period =
-        2.0 * kPi * std::sqrt(config.mass / expected_stiffness);
+        2.0 * kPi * std::sqrt(config.mass / derived.contact_stiffness);
     EXPECT_NEAR(derived.natural_period, expected_period,
                 1e-14 * expected_period);
     EXPECT_NEAR(derived.duration, 15.0 * expected_period,

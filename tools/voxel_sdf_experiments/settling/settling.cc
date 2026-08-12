@@ -339,9 +339,7 @@ SettlingDerived CalcSettlingDerived(const SettlingConfig& config) {
   result.analytic_equilibrium_penetration =
       EquilibriumPenetration(factory, result.weight, kRadius);
   const double penetration = result.analytic_equilibrium_penetration;
-  const double x = kRadius - penetration / 2.0;
-  result.contact_stiffness =
-      kPi * config.hydroelastic_modulus * x * penetration / (2.0 * kRadius);
+  result.contact_stiffness = StiffnessAtPenetration(factory, penetration);
   result.natural_period =
       2.0 * kPi * std::sqrt(config.mass / result.contact_stiffness);
   result.duration =
