@@ -35,13 +35,36 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "components",
+    srcs = ["components.cc"],
+    hdrs = ["components.h"],
+    deps = [
+        ":surface_view",
+        "//common:essential",
+    ],
+)
+
+drake_cc_library(
     name = "metrics",
     srcs = ["metrics.cc"],
     hdrs = ["metrics.h"],
     deps = [
+        ":components",
         ":reference",
         ":surface_view",
         "//common:essential",
+    ],
+)
+
+drake_cc_library(
+    name = "mesh_export",
+    srcs = ["mesh_export.cc"],
+    hdrs = ["mesh_export.h"],
+    deps = [
+        ":components",
+        ":surface_view",
+        "//common:essential",
+        "@fmt",
     ],
 )
 
@@ -91,6 +114,24 @@ drake_cc_googletest(
     name = "emit_test",
     srcs = ["test/emit_test.cc"],
     deps = [":emit"],
+)
+
+drake_cc_googletest(
+    name = "components_test",
+    srcs = ["test/components_test.cc"],
+    deps = [
+        ":components",
+        ":surface_view",
+    ],
+)
+
+drake_cc_googletest(
+    name = "mesh_export_test",
+    srcs = ["test/mesh_export_test.cc"],
+    deps = [
+        ":mesh_export",
+        ":surface_view",
+    ],
 )
 
 add_lint_tests()

@@ -28,10 +28,12 @@ drake_cc_library(
         "//geometry/query_results:contact_surface",
         "//math:geometric_transform",
         "//systems/framework:context",
+        "//tools/voxel_sdf_experiments/common:mesh_export",
         "//tools/voxel_sdf_experiments/common:metrics",
         "//tools/voxel_sdf_experiments/common:reference",
         "//tools/voxel_sdf_experiments/common:representation",
         "//tools/voxel_sdf_experiments/common:surface_view",
+        "@fmt",
     ],
 )
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string_view>
 
 #include "drake/common/eigen_types.h"
@@ -26,6 +27,9 @@ struct FrozenSurfaceConfig {
   double modulus_a{1.0e8};
   double modulus_b{1.0e8};
   Eigen::Vector3d grid_rpy_deg{Eigen::Vector3d::Zero()};
+  /* When non-empty, the contact surface is also written here as a legacy VTK
+   POLYDATA file. Empty by default so sweeps do not emit meshes unasked. */
+  std::filesystem::path mesh_output;
 };
 
 Metrics RunOne(const FrozenSurfaceConfig& config);

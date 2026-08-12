@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/kinematics_vector.h"
@@ -17,6 +19,7 @@
 #include "drake/math/rigid_transform.h"
 #include "drake/math/roll_pitch_yaw.h"
 #include "drake/systems/framework/context.h"
+#include "drake/tools/voxel_sdf_experiments/common/mesh_export.h"
 #include "drake/tools/voxel_sdf_experiments/common/reference.h"
 #include "drake/tools/voxel_sdf_experiments/common/surface_view.h"
 
@@ -178,7 +181,14 @@ Metrics RunOne(const FrozenSurfaceConfig& config) {
   ValidateConfig(config);
   const ContactSurface<double> surface = ComputeSurface(config);
   const std::unique_ptr<Reference> reference = MakeReference(config);
-  return CalcMetrics(MakeSurfaceView(surface), *reference);
+  const SurfaceView view = MakeSurfaceView(surface);
+  if (!config.mesh_output.empty()) {
+    WriteSurfaceVtk(
+        config.mesh_output, view,
+        fmt::format("{} {} h={}", to_string(config.scene),
+                    to_string(config.representation), config.voxel_width));
+  }
+  return CalcMetrics(view, *reference);
 }
 
 }  // namespace voxel_sdf_experiments

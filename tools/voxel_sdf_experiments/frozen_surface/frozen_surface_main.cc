@@ -28,6 +28,9 @@ DEFINE_double(grid_roll_deg, 0.0, "Body-A grid roll in degrees.");
 DEFINE_double(grid_pitch_deg, 0.0, "Body-A grid pitch in degrees.");
 DEFINE_double(grid_yaw_deg, 0.0, "Body-A grid yaw in degrees.");
 DEFINE_string(output, "frozen_surface.csv", "Per-run output CSV path.");
+DEFINE_string(mesh_output, "",
+              "When set, also write the contact surface here as a legacy "
+              "VTK POLYDATA file for ParaView or PyVista.");
 
 namespace drake {
 namespace tools {
@@ -48,6 +51,7 @@ int DoMain() {
   config.modulus_b = FLAGS_hydroelastic_modulus_b;
   config.grid_rpy_deg = Eigen::Vector3d(
       FLAGS_grid_roll_deg, FLAGS_grid_pitch_deg, FLAGS_grid_yaw_deg);
+  config.mesh_output = std::filesystem::path(FLAGS_mesh_output);
   const Metrics metrics = RunOne(config);
 
   RunRecord record;
@@ -69,6 +73,9 @@ int DoMain() {
   std::cout << "wrote " << FLAGS_output << ": faces=" << metrics.num_faces
             << ", force_relative_error=" << metrics.normal_force_relative_error
             << ", surface_rms_m=" << metrics.surface_distance_rms << '\n';
+  if (!FLAGS_mesh_output.empty()) {
+    std::cout << "wrote mesh " << FLAGS_mesh_output << '\n';
+  }
   return 0;
 }
 
