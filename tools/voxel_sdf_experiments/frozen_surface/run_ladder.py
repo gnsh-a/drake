@@ -28,6 +28,7 @@ def _run_one(
     representation: str,
     h_mm: float,
     meshes: bool,
+    penetration_m: float,
 ) -> tuple[pathlib.Path, str]:
     h_m = h_mm / 1000.0
     stem = f"{scene}__{representation}__h_{_rung_label(h_mm)}mm"
@@ -36,7 +37,7 @@ def _run_one(
         str(binary),
         f"--scene={scene}",
         f"--representation={representation}",
-        "--penetration=0.0199",
+        f"--penetration={penetration_m:.17g}",
         f"--voxel_width={h_m:.17g}",
         f"--tet_resolution_hint={h_m:.17g}",
         f"--output={output}",
@@ -86,6 +87,19 @@ def main() -> int:
         help="Also write each contact surface as VTK POLYDATA under "
         "OUTPUT_DIR/meshes, for ParaView or PyVista.",
     )
+    parser.add_argument(
+        "--penetration",
+        type=float,
+        default=0.0199,
+        help="Commanded penetration in metres, held fixed across the ladder.",
+    )
+    parser.add_argument(
+        "--rungs_mm",
+        type=str,
+        default="",
+        help="Comma-separated rung list in mm, overriding --rungs. Use this "
+        "when a different penetration needs a rescaled ladder.",
+    )
     args = parser.parse_args()
 
     binary = args.binary.resolve()
@@ -97,11 +111,18 @@ def main() -> int:
     if args.meshes:
         (args.output_dir / "meshes").mkdir(parents=True, exist_ok=True)
 
-    rungs = (
-        (ALL_RUNGS_MM[0], ALL_RUNGS_MM[-1])
-        if args.rungs == "endpoints"
-        else ALL_RUNGS_MM
-    )
+    if args.penetration <= 0.0:
+        parser.error("--penetration must be positive")
+    if args.rungs_mm:
+        rungs = tuple(float(v) for v in args.rungs_mm.split(","))
+        if not all(h > 0.0 for h in rungs):
+            parser.error("--rungs_mm values must be positive")
+    else:
+        rungs = (
+            (ALL_RUNGS_MM[0], ALL_RUNGS_MM[-1])
+            if args.rungs == "endpoints"
+            else ALL_RUNGS_MM
+        )
     runs = [
         (scene, representation, h_mm)
         for scene in SCENES
@@ -110,6 +131,7 @@ def main() -> int:
     ]
     print(
         f"Running {len(runs)} frozen queries with {args.jobs} workers; "
+        f"penetration={args.penetration} m, rungs={rungs} mm, "
         f"output={args.output_dir}"
     )
     failures = []
@@ -123,6 +145,7 @@ def main() -> int:
                 representation,
                 h_mm,
                 args.meshes,
+                args.penetration,
             ): (scene, representation, h_mm)
             for scene, representation, h_mm in runs
         }
