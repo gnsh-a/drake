@@ -1,0 +1,60 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_googletest",
+    "drake_cc_library",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+exports_files([
+    "disk_plane.yaml",
+    "run_ladder.py",
+])
+
+drake_cc_library(
+    name = "disk_farkas_lib",
+    srcs = ["disk_farkas.cc"],
+    hdrs = ["disk_farkas.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//common:name_value",
+        "//common/yaml:yaml_io",
+        "//geometry:geometry_ids",
+        "//geometry:proximity_properties",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//multibody/math:spatial_algebra",
+        "//multibody/plant",
+        "//multibody/plant:contact_results",
+        "//multibody/plant:coulomb_friction",
+        "//multibody/tree:spatial_inertia",
+        "//systems/analysis:simulator",
+        "//systems/framework:context",
+        "//systems/framework:diagram_builder",
+        "//tools/voxel_sdf_experiments/common:emit",
+        "//tools/voxel_sdf_experiments/common:representation",
+    ],
+)
+
+drake_cc_binary(
+    name = "disk_farkas",
+    srcs = ["disk_farkas_main.cc"],
+    data = ["disk_plane.yaml"],
+    deps = [
+        ":disk_farkas_lib",
+        "//tools/voxel_sdf_experiments/common:representation",
+        "@gflags",
+    ],
+)
+
+drake_cc_googletest(
+    name = "disk_farkas_test",
+    srcs = ["test/disk_farkas_test.cc"],
+    data = ["disk_plane.yaml"],
+    deps = [":disk_farkas_lib"],
+)
+
+add_lint_tests()

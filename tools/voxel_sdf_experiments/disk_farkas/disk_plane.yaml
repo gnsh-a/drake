@@ -1,0 +1,27 @@
+# Sliding + spinning free disk on a plane. The dimensions reproduce the
+# quarter-coin puck in Masterjohn et al., "Velocity Level Approximation of
+# Pressure Field Contact Patches" (RA-L 2022, arXiv:2110.04157), Sec. V-A.
+# The initial slide and spin give eps0 = |v| / (|wz| R) about 1.37; Coulomb
+# friction drives it toward the universal terminal ratio eps* about 0.653.
+disk:
+  radius: 0.01213                        # m
+  thickness: 0.00175                    # m
+  hydroelastic_modulus: 1.0e7            # Pa
+  density: 7010.0                        # kg/m^3
+  # This is only a near-contact seed for the free six-DOF body. The disk starts
+  # at rest, then settles under gravity and compliant contact before the slide
+  # and spin are applied as an instantaneous velocity kick. Its z, roll, and
+  # pitch are never pinned.
+  initial_position: [0.0, 0.0, 0.010874868]  # m, world
+  initial_linear_velocity: [0.2, 0.0, 0.0]   # m/s
+  initial_angular_velocity: [0.0, 0.0, 12.0] # rad/s
+
+box:
+  full_size: [0.2, 0.2, 0.02]   # m; half sizes are full_size / 2
+  hydroelastic_modulus: 1.0e7   # Pa
+
+material:
+  friction: 0.2
+
+mesh:
+  sdf_target_voxel_size: 0.0025  # m
