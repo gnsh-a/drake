@@ -15,6 +15,27 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "fine_tet_reference",
+    srcs = ["fine_tet_reference.cc"],
+    hdrs = ["fine_tet_reference.h"],
+    deps = [
+        ":reference",
+        ":representation",
+        "//common:essential",
+        "//geometry:geometry_frame",
+        "//geometry:geometry_instance",
+        "//geometry:kinematics_vector",
+        "//geometry:scene_graph",
+        "//geometry:shape_specification",
+        "//geometry/proximity:bvh",
+        "//geometry/proximity:triangle_surface_mesh",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//systems/framework:context",
+    ],
+)
+
+drake_cc_library(
     name = "representation",
     srcs = ["representation.cc"],
     hdrs = ["representation.h"],
@@ -79,6 +100,20 @@ drake_cc_googletest(
     name = "reference_test",
     srcs = ["test/reference_test.cc"],
     deps = [":reference"],
+)
+
+drake_cc_googletest(
+    name = "fine_tet_reference_test",
+    srcs = ["test/fine_tet_reference_test.cc"],
+    deps = [
+        ":fine_tet_reference",
+        ":reference",
+        "//geometry:geometry_ids",
+        "//geometry:shape_specification",
+        "//geometry/proximity:mesh_field",
+        "//geometry/proximity:polygon_surface_mesh",
+        "//geometry/query_results:contact_surface",
+    ],
 )
 
 drake_cc_googletest(
