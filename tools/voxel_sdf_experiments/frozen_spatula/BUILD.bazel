@@ -1,0 +1,65 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_googletest",
+    "drake_cc_library",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+exports_files(["run_sweep.py"])
+
+drake_cc_library(
+    name = "frozen_spatula_lib",
+    srcs = ["frozen_spatula.cc"],
+    hdrs = ["frozen_spatula.h"],
+    data = ["//:all_models"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//common:essential",
+        "//geometry:geometry_frame",
+        "//geometry:geometry_ids",
+        "//geometry:geometry_instance",
+        "//geometry:geometry_properties",
+        "//geometry:kinematics_vector",
+        "//geometry:proximity_properties",
+        "//geometry:scene_graph",
+        "//geometry:shape_specification",
+        "//geometry/query_results:contact_surface",
+        "//math:geometric_transform",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/tree",
+        "//systems/framework:context",
+        "//systems/framework:diagram",
+        "//systems/framework:diagram_builder",
+        "//tools/voxel_sdf_experiments/common:components",
+        "//tools/voxel_sdf_experiments/common:emit",
+        "//tools/voxel_sdf_experiments/common:fine_tet_reference",
+        "//tools/voxel_sdf_experiments/common:mesh_export",
+        "//tools/voxel_sdf_experiments/common:representation",
+        "//tools/voxel_sdf_experiments/common:surface_view",
+        "@fmt",
+    ],
+)
+
+drake_cc_binary(
+    name = "frozen_spatula",
+    srcs = ["frozen_spatula_main.cc"],
+    deps = [
+        ":frozen_spatula_lib",
+        "@gflags",
+    ],
+)
+
+drake_cc_googletest(
+    name = "frozen_spatula_test",
+    srcs = ["test/frozen_spatula_test.cc"],
+    deps = [
+        ":frozen_spatula_lib",
+        "//common/test_utilities:eigen_matrix_compare",
+    ],
+)
+
+add_lint_tests()
