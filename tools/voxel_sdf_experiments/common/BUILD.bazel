@@ -4,8 +4,18 @@ load(
     "drake_cc_googletest",
     "drake_cc_library",
 )
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_library",
+    "drake_py_unittest",
+)
 
 package(default_visibility = ["//visibility:public"])
+
+drake_py_library(
+    name = "analysis",
+    srcs = ["analysis.py"],
+)
 
 drake_cc_library(
     name = "reference",
@@ -167,6 +177,11 @@ drake_cc_googletest(
         ":mesh_export",
         ":surface_view",
     ],
+)
+
+drake_py_unittest(
+    name = "analysis_test",
+    deps = [":analysis"],
 )
 
 add_lint_tests()
