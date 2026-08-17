@@ -1,0 +1,88 @@
+{
+  "name": "section3",
+  "purpose": "Frozen-surface convergence for the paper's sections 3 and 4.",
+
+  "penetration_m": 0.020,
+  "scenes": ["sphere_sphere", "sphere_box"],
+  "representations": ["tet", "plane_clip", "marching_cubes"],
+
+  "resolution_parameterization": {
+    "rule": "h = c / n, with c = 0.090 m and integer n",
+    "c_m": 0.090,
+    "why": [
+      "c = R - delta/2 is the distance from a sphere centre to the contact",
+      "plane at this penetration, so h = c/n places the plane an exact integer",
+      "number of cells from the centre."
+    ]
+  },
+
+  "phase_rule": {
+    "clean_when": "n mod 9 in {1, 2, 3, 4}",
+    "measured": [
+      "The affine (plane_clip) contact plane sits 19n/9 cells from the",
+      "sphere grid's lower bound. Because 19 = 1 (mod 9), the fractional part",
+      "is exactly (n mod 9)/9. A fractional part of 0 puts the plane on a cell",
+      "boundary and the force error jumps 5x to 20x.",
+      "Verified against 18 measured rungs at delta = 20 mm: n = 9, 18, 36, 45,",
+      "72 give 14.4, 7.8, 4.0, 3.2, 2.0 percent, while n = 10, 12, 20, 30 give",
+      "1.39, 0.96, 0.34, 0.15 percent.",
+      "A separate sweep at fixed h located the same defect as a razor-narrow",
+      "spike whenever (R - delta/2)/h is a half-integer: predicted delta =",
+      "15.5 and 24.5 mm at h = 4.5 mm before running, and both spiked to 7.7",
+      "and 6.6 percent while +-0.05 mm either side stayed near 0.4 percent.",
+      "Only sphere_sphere is affected. On sphere_box the equal-pressure",
+      "surface is a paraboloid, so different radii cross different cell",
+      "boundaries out of phase and the error averages out; its errors fall",
+      "monotonically from 16 percent to 0.02 percent with no anomaly.",
+      "Marching cubes interpolates across cells and shows no phase effect.",
+      "Every n below satisfies the rule, in both scenes and for all three",
+      "representations, so no rung sits on the defect."
+    ]
+  },
+
+  "ladders": {
+    "matched_h": {
+      "what": "Every representation at the same h. Answers convergence order.",
+      "n": [10, 22, 49, 76],
+      "h_mm": [9.0, 4.0909, 1.8367, 1.1842],
+      "note": "Span 7.6x. Same n for all three representations."
+    },
+    "matched_count": {
+      "what": [
+        "Per-representation h chosen so contact-element counts land near 10,",
+        "1e2, 1e3 and 1e4. Answers accuracy per unit of solver work.",
+        "Counts are approximate by design: n is constrained to the clean-phase",
+        "set, and Drake's tetrahedral mesher is quantized -- it returns the",
+        "same mesh across ranges of resolution hint, so tet cannot be tuned to",
+        "an arbitrary count. Actual counts are recorded per run."
+      ],
+      "targets": [10, 100, 1000, 10000],
+      "n_by_representation": {
+        "tet": [2, 3, 10, 46],
+        "plane_clip": [2, 10, 22, 75],
+        "marching_cubes": [2, 4, 19, 49]
+      },
+      "expected_faces_sphere_box": {
+        "tet": [70, 144, 1238, 16076],
+        "plane_clip": [9, 209, 862, 10013],
+        "marching_cubes": [28, 78, 1339, 8909]
+      },
+      "note": [
+        "tet floors near 70 faces on sphere_box even at h = 45 mm, so the",
+        "10-element rung is only reachable by the voxel representations there."
+      ]
+    }
+  },
+
+  "provenance": {
+    "binary": "//tools/voxel_sdf_experiments/frozen_surface:frozen_surface",
+    "csv_schema_version": 2,
+    "supersedes": [
+      "out/frozen_surface_ladder (delta = 19.9 mm, h = 10/5/2.5/1.25 mm)",
+      "out/ladder_pen2p2mm (delta = 2.2 mm, same rungs)",
+      "Both used n = 9, 18, 36, 72, i.e. n = 0 (mod 9) at every rung, so every",
+      "affine sphere_sphere point sat on the cell-boundary defect. Their",
+      "affine numbers for that scene should not be quoted."
+    ]
+  }
+}
