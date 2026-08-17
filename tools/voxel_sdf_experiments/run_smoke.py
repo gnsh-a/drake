@@ -22,6 +22,8 @@ SCOPE_NOTE = (
     "Scope reduction: settling runs sphere_sphere only to keep the whole "
     "serial smoke under 10 minutes; all three representations remain covered."
 )
+SURFACE_STUDIES = ("frozen_surface", "frozen_spatula")
+SOLVER_STUDIES = ("settling", "disk_farkas", "spatula_slip")
 
 FROZEN_SURFACE_HEADER = (
     "schema_version,git_commit,git_dirty,scene,representation,penetration_m,"
@@ -552,6 +554,24 @@ def _build_command(
     return tuple(command)
 
 
+def _analyzer_command(study: str, output_dir: pathlib.Path) -> tuple[str, ...]:
+    experiments = _workspace_root() / "tools/voxel_sdf_experiments"
+    if study in SURFACE_STUDIES:
+        analyzer = experiments / "analyze_surface.py"
+    elif study in SOLVER_STUDIES:
+        analyzer = experiments / "analyze_solver.py"
+    else:
+        raise ValueError(f"unknown study: {study}")
+    return (
+        sys.executable,
+        str(analyzer),
+        study,
+        str(output_dir),
+        "--output-dir",
+        str(output_dir / "analysis"),
+    )
+
+
 def _print_plan(
     studies: tuple[Study, ...],
     run_root: pathlib.Path,
@@ -575,26 +595,21 @@ def _print_plan(
             f"timeout {study.timeout_seconds:.0f} s)"
         )
         print(f"    {_format_command(study.command)}")
-    analyzer = (
-        sys.executable,
-        str(
-            _workspace_root()
-            / "tools/voxel_sdf_experiments/frozen_surface/analyze.py"
-        ),
-        str(run_root / "frozen_surface"),
-        "--output-dir",
-        str(run_root / "frozen_surface/analysis"),
+        analyzer = _analyzer_command(study.name, study.output_dir)
+        print(
+            f"  {study.name} analyzer "
+            f"({ANALYZER_TIMEOUT_SECONDS:.0f} s timeout)"
+        )
+        print(f"    {_format_command(analyzer)}")
+    print("\nAnalyzer policy:")
+    print("  analyze_surface.py  frozen_surface, frozen_spatula (required)")
+    print(
+        "  analyze_solver.py   settling, disk_farkas, spatula_slip (required)"
     )
     print(
-        f"  frozen_surface analyzer ({ANALYZER_TIMEOUT_SECONDS:.0f} s timeout)"
+        "  Solver contact loss is reported and excluded from fits; it is a "
+        "study result, not an analyzer failure."
     )
-    print(f"    {_format_command(analyzer)}")
-    print("\nAnalyzer policy:")
-    print("  frozen_surface  RUN (required)")
-    print("  settling        SKIP (absent in this working tree)")
-    print("  disk_farkas     NONE")
-    print("  frozen_spatula  NONE")
-    print("  spatula_slip    NONE")
 
 
 def _print_table(rows: list[TableRow]) -> None:
@@ -638,32 +653,22 @@ def _build_failure_rows(result: CommandResult) -> list[TableRow]:
     ]
 
 
-def _run_frozen_analyzer(
-    output_dir: pathlib.Path, details: list[str]
+def _run_analyzer(
+    study: str, output_dir: pathlib.Path, details: list[str]
 ) -> tuple[str, bool]:
-    analyzer = (
-        _workspace_root()
-        / "tools/voxel_sdf_experiments/frozen_surface/analyze.py"
-    )
+    command = _analyzer_command(study, output_dir)
+    analyzer = pathlib.Path(command[1])
     if not analyzer.is_file():
-        details.append(f"frozen_surface analyzer is absent: {analyzer}")
+        details.append(f"{study} analyzer is absent: {analyzer}")
         return "FAIL (absent)", False
-    command = (
-        sys.executable,
-        str(analyzer),
-        str(output_dir),
-        "--output-dir",
-        str(output_dir / "analysis"),
-    )
     result = _run_command(command, ANALYZER_TIMEOUT_SECONDS)
     (output_dir / "analyzer.log").write_text(result.output, encoding="utf-8")
     if result.timed_out:
-        details.append("frozen_surface analyzer timed out")
+        details.append(f"{study} analyzer timed out")
         return "TIMEOUT", False
     if result.returncode != 0:
         details.append(
-            f"frozen_surface analyzer exited {result.returncode}; "
-            "see analyzer.log"
+            f"{study} analyzer exited {result.returncode}; see analyzer.log"
         )
         return f"FAIL (exit {result.returncode})", False
     return f"PASS ({result.wall_time_seconds:.1f} s)", True
@@ -680,17 +685,11 @@ def _run_all(
     rows = []
     analyzer_status = {
         "frozen_surface": "NOT RUN",
-        "settling": "SKIP (absent)",
-        "disk_farkas": "NONE",
-        "frozen_spatula": "NONE",
-        "spatula_slip": "NONE",
+        "settling": "NOT RUN",
+        "disk_farkas": "NOT RUN",
+        "frozen_spatula": "NOT RUN",
+        "spatula_slip": "NOT RUN",
     }
-
-    settling_analyzer = (
-        _workspace_root() / "tools/voxel_sdf_experiments/settling/analyze.py"
-    )
-    if settling_analyzer.exists():
-        analyzer_status["settling"] = "SKIP (present; not in step 1)"
 
     print(f"Output: {run_root}")
     print("Coverage: all 3 representations in all 5 studies.")
@@ -744,9 +743,9 @@ def _run_all(
             common_status = "PASS"
 
         analyzer_passed = True
-        if study.name == "frozen_surface" and common_status == "PASS":
-            analyzer_status[study.name], analyzer_passed = _run_frozen_analyzer(
-                study.output_dir, details
+        if common_status == "PASS":
+            analyzer_status[study.name], analyzer_passed = _run_analyzer(
+                study.name, study.output_dir, details
             )
 
         for representation in REPRESENTATIONS:

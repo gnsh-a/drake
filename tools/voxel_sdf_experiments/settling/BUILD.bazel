@@ -8,10 +8,7 @@ load(
 
 package(default_visibility = ["//visibility:private"])
 
-exports_files([
-    "analyze.py",
-    "run_ladder.py",
-])
+exports_files(["run_ladder.py"])
 
 drake_cc_library(
     name = "settling_lib",

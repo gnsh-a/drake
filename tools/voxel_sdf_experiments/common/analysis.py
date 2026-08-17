@@ -152,6 +152,23 @@ def order_fits(
             else [row for row in group if row_gate.predicate(row)]
         )
         for metric in metrics:
+            if (
+                row_gate is not None
+                and len(eligible) >= 2
+                and len(eligible) < len(group)
+            ):
+                excluded = len(group) - len(eligible)
+                classifications.append(
+                    {
+                        "scene": scene,
+                        "representation": representation,
+                        "metric": metric.name,
+                        "reason": f"excluded_non_{row_gate.name}_rungs",
+                        "detail": f"{excluded} of {len(group)} rungs did not "
+                        f"meet the {row_gate.name} gate and were excluded "
+                        "from the fit",
+                    }
+                )
             values = [
                 (float(row["voxel_width_m"]), metric_value(row, metric.name))
                 for row in eligible

@@ -90,6 +90,26 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(fits, [])
         self.assertEqual(classifications[0]["reason"], "no_settled_rungs")
 
+    def test_unsettled_rung_is_excluded_and_reported(self):
+        fits, classifications = analysis.order_fits(
+            self._rows([16.0, 4.0, 1.0e12], settled=[True, True, False]),
+            (analysis.Metric("error", 0.0, "error"),),
+            self._value,
+            row_gate=analysis.RowGate(
+                "settled", lambda row: row["settled"] == "True"
+            ),
+        )
+        self.assertEqual(len(fits), 1)
+        self.assertEqual(fits[0]["samples"], 2)
+        self.assertEqual(fits[0]["eligible_rungs"], 2)
+        self.assertAlmostEqual(fits[0]["order"], 2.0)
+        self.assertEqual(len(classifications), 1)
+        self.assertEqual(
+            classifications[0]["reason"],
+            "excluded_non_settled_rungs",
+        )
+        self.assertIn("excluded from the fit", classifications[0]["detail"])
+
     def test_saturated_series(self):
         fits, classifications = analysis.order_fits(
             self._rows([0.9, 0.8, 0.7]),
