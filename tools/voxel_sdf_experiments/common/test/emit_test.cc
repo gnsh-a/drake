@@ -23,10 +23,14 @@ GTEST_TEST(EmitTest, SchemaIsStable) {
       "normal_force_relative_error,pressure_error_rms_pa,"
       "pressure_error_max_pa,peak_pressure_pa,reference_peak_pressure_pa,"
       "peak_pressure_relative_error,projected_area_m2,reference_area_m2,"
-      "area_relative_error,patch_radius_m,reference_patch_radius_m,"
+      "area_relative_error,total_area_m2,total_area_relative_error,"
+      "patch_radius_m,reference_patch_radius_m,"
       "patch_radius_relative_error,num_faces,num_vertices,centroid_x_m,"
       "centroid_y_m,centroid_z_m,centroid_position_error_m,"
-      "largest_component_area_fraction";
+      "center_of_pressure_x_m,center_of_pressure_y_m,center_of_pressure_z_m,"
+      "center_of_pressure_error_m,spurious_moment_nm,"
+      "spurious_moment_normalized,"
+      "largest_component_area_fraction,num_components";
   EXPECT_EQ(CsvHeader(), kExpectedHeader);
 
   RunRecord record;

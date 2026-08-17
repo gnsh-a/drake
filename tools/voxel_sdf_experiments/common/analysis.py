@@ -109,8 +109,8 @@ def read_rows(input_dir: pathlib.Path) -> list[Row]:
                 f"{path} has {len(file_rows)} data rows, expected 1"
             )
         row = file_rows[0]
-        if row.get("schema_version") != "1":
-            raise RuntimeError(f"{path} does not use schema version 1")
+        if row.get("schema_version") != "2":
+            raise RuntimeError(f"{path} does not use schema version 2")
         missing = {
             field
             for field in ("scene", "representation", "voxel_width_m")

@@ -20,16 +20,29 @@ double RelativeError(double value, double reference) {
   return std::abs(value - reference) / reference;
 }
 
-double CalcLargestComponentAreaFraction(const SurfaceView& surface,
-                                        double total_area) {
+struct ComponentSummary {
+  double largest_area_fraction{};
+  int count{};
+};
+
+ComponentSummary CalcComponentSummary(const SurfaceView& surface,
+                                      double total_area) {
   const std::vector<int> component_ids =
       CalcFaceComponentIds(surface, DefaultComponentTolerance(surface));
   std::vector<double> component_area(surface.faces.size(), 0.0);
   for (int face_index = 0; face_index < ssize(surface.faces); ++face_index) {
     component_area[component_ids[face_index]] += surface.faces[face_index].area;
   }
-  return *std::max_element(component_area.begin(), component_area.end()) /
-         total_area;
+  // Component ids are arbitrary but consistent labels, so an id is occupied
+  // exactly when at least one face accumulated area into it.
+  ComponentSummary result;
+  for (const double area : component_area) {
+    if (area > 0.0) ++result.count;
+  }
+  result.largest_area_fraction =
+      *std::max_element(component_area.begin(), component_area.end()) /
+      total_area;
+  return result;
 }
 
 }  // namespace
@@ -57,6 +70,10 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
   double squared_pressure_error_integral = 0.0;
   Eigen::Vector3d force_W = Eigen::Vector3d::Zero();
   Eigen::Vector3d centroid_integral_W = Eigen::Vector3d::Zero();
+  const Eigen::Vector3d reference_centroid_W = reference.centroid();
+  Eigen::Vector3d pressure_centroid_integral_W = Eigen::Vector3d::Zero();
+  double pressure_integral = 0.0;
+  Eigen::Vector3d moment_W = Eigen::Vector3d::Zero();
   for (const Face& face : surface.faces) {
     if (!(std::isfinite(face.area) && face.area >= 0.0 &&
           std::isfinite(face.pressure) && face.centroid_W.allFinite() &&
@@ -78,7 +95,13 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
         std::max(result.pressure_error_max, std::abs(pressure_error));
     result.peak_pressure = std::max(result.peak_pressure, face.pressure);
 
-    force_W += face.area * face.pressure * face.normal_W;
+    const Eigen::Vector3d face_force_W =
+        face.area * face.pressure * face.normal_W;
+    force_W += face_force_W;
+    moment_W += (face.centroid_W - reference_centroid_W).cross(face_force_W);
+    pressure_integral += face.area * face.pressure;
+    pressure_centroid_integral_W +=
+        face.area * face.pressure * face.centroid_W;
     result.projected_area +=
         face.area * std::abs(face.normal_W.dot(reference_normal));
   }
@@ -97,12 +120,31 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
       RelativeError(result.peak_pressure, result.reference_peak_pressure);
   result.area_relative_error =
       RelativeError(result.projected_area, result.reference_area);
+  result.total_area = total_area;
+  result.total_area_relative_error =
+      RelativeError(result.total_area, result.reference_area);
 
   result.centroid_W = centroid_integral_W / total_area;
   result.centroid_position_error =
-      (result.centroid_W - reference.centroid()).norm();
+      (result.centroid_W - reference_centroid_W).norm();
 
-  const Eigen::Vector3d reference_centroid = reference.centroid();
+  if (!(pressure_integral > 0.0)) {
+    throw std::logic_error("Surface must carry a positive pressure integral");
+  }
+  result.center_of_pressure_W = pressure_centroid_integral_W / pressure_integral;
+  result.center_of_pressure_error =
+      (result.center_of_pressure_W - reference_centroid_W).norm();
+
+  // Axisymmetry makes the exact moment about the reference centroid zero, so
+  // this measures discretization asymmetry alone. Normalizing by force times
+  // patch radius turns it into the effective offset of the resultant, as a
+  // fraction of the patch.
+  result.spurious_moment = moment_W.norm();
+  result.spurious_moment_normalized =
+      result.spurious_moment /
+      (result.reference_force * result.reference_patch_radius);
+
+  const Eigen::Vector3d reference_centroid = reference_centroid_W;
   for (const Eigen::Vector3d& vertex_W : surface.vertices_W) {
     const Eigen::Vector3d offset = vertex_W - reference_centroid;
     const double radial_distance =
@@ -111,8 +153,9 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
   }
   result.patch_radius_relative_error =
       RelativeError(result.patch_radius, result.reference_patch_radius);
-  result.largest_component_area_fraction =
-      CalcLargestComponentAreaFraction(surface, total_area);
+  const ComponentSummary components = CalcComponentSummary(surface, total_area);
+  result.largest_component_area_fraction = components.largest_area_fraction;
+  result.num_components = components.count;
   return result;
 }
 
