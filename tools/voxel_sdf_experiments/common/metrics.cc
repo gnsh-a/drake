@@ -100,8 +100,7 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
     force_W += face_force_W;
     moment_W += (face.centroid_W - reference_centroid_W).cross(face_force_W);
     pressure_integral += face.area * face.pressure;
-    pressure_centroid_integral_W +=
-        face.area * face.pressure * face.centroid_W;
+    pressure_centroid_integral_W += face.area * face.pressure * face.centroid_W;
     result.projected_area +=
         face.area * std::abs(face.normal_W.dot(reference_normal));
   }
@@ -121,8 +120,9 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
   result.area_relative_error =
       RelativeError(result.projected_area, result.reference_area);
   result.total_area = total_area;
+  result.reference_surface_area = reference.surface_area();
   result.total_area_relative_error =
-      RelativeError(result.total_area, result.reference_area);
+      RelativeError(result.total_area, result.reference_surface_area);
 
   result.centroid_W = centroid_integral_W / total_area;
   result.centroid_position_error =
@@ -131,9 +131,10 @@ Metrics CalcMetrics(const SurfaceView& surface, const Reference& reference) {
   if (!(pressure_integral > 0.0)) {
     throw std::logic_error("Surface must carry a positive pressure integral");
   }
-  result.center_of_pressure_W = pressure_centroid_integral_W / pressure_integral;
+  result.center_of_pressure_W =
+      pressure_centroid_integral_W / pressure_integral;
   result.center_of_pressure_error =
-      (result.center_of_pressure_W - reference_centroid_W).norm();
+      (result.center_of_pressure_W - reference.pressure_centroid()).norm();
 
   // Axisymmetry makes the exact moment about the reference centroid zero, so
   // this measures discretization asymmetry alone. Normalizing by force times

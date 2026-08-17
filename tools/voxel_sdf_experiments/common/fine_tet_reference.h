@@ -37,11 +37,13 @@ class FineTetReference final : public Reference {
 
   double force() const final;
   double area() const final;
+  double surface_area() const final;
   double distance_to_surface(const Eigen::Vector3d& p_RQ) const final;
   double pressure_at(const Eigen::Vector3d& p_RQ) const final;
   double patch_radius() const final;
   double peak_pressure() const final;
   Eigen::Vector3d centroid() const final;
+  Eigen::Vector3d pressure_centroid() const final;
   Eigen::Vector3d normal() const final;
 
  private:

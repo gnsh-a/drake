@@ -115,11 +115,31 @@ double DistanceToAxisymmetricPatch(const Eigen::Vector3d& p_RQ,
   return std::sqrt(std::max(0.0, minimum));
 }
 
+/* Integrals over the true equal-pressure surface, which is axisymmetric and
+ parameterized here by pressure fraction rather than by radius. The pressure at
+ parameter `fraction` is exactly `peak_pressure * fraction`, so a
+ pressure-weighted integrand is the area-weighted one times `fraction`.
+
+ Simpson over 4096 intervals on a smooth integrand leaves a relative error near
+ 1e-15, so these are exact for every purpose here. The quadrature is over the
+ analytic surface and never touches a contact discretization. */
+struct SurfaceIntegrals {
+  double area{};             // Integral of dA.
+  double height{};           // Integral of z dA.
+  double pressure{};         // Integral of (p / peak) dA.
+  double pressure_height{};  // Integral of z (p / peak) dA.
+
+  double centroid_height() const { return height / area; }
+  double pressure_centroid_height() const { return pressure_height / pressure; }
+};
+
 template <size_t Q, size_t Z>
-double SurfaceCentroidHeight(
+SurfaceIntegrals CalcSurfaceIntegrals(
     const std::array<double, Q>& radius_squared_coefficients,
     const std::array<double, Z>& height_coefficients) {
   constexpr int kIntervals = 4096;
+  // The axisymmetric area element is dA = pi * area_density * d(fraction),
+  // with area_density as computed below.
   const auto sample = [&](double fraction) {
     double radius_squared = 0.0;
     double radius_squared_derivative = 0.0;
@@ -141,21 +161,27 @@ double SurfaceCentroidHeight(
         std::sqrt(radius_squared_derivative * radius_squared_derivative +
                   4.0 * std::max(0.0, radius_squared) * height_derivative *
                       height_derivative);
-    return std::array<double, 2>{
-        area_density,
-        area_density * EvaluatePolynomial(height_coefficients, fraction)};
+    const double height = EvaluatePolynomial(height_coefficients, fraction);
+    return std::array<double, 4>{area_density, area_density * height,
+                                 area_density * fraction,
+                                 area_density * fraction * height};
   };
-  std::array<double, 2> integral{};
+  std::array<double, 4> integral{};
   for (int i = 0; i <= kIntervals; ++i) {
     const double fraction =
         static_cast<double>(i) / static_cast<double>(kIntervals);
     const double weight =
         i == 0 || i == kIntervals ? 1.0 : (i % 2 == 0 ? 2.0 : 4.0);
     const auto value = sample(fraction);
-    integral[0] += weight * value[0];
-    integral[1] += weight * value[1];
+    for (size_t term = 0; term < integral.size(); ++term) {
+      integral[term] += weight * value[term];
+    }
   }
-  return integral[1] / integral[0];
+  // Simpson's h/3, times the pi from the axisymmetric area element. Ratios
+  // taken from these are unaffected by the scale; the areas are not.
+  const double scale = kPi / (3.0 * static_cast<double>(kIntervals));
+  return SurfaceIntegrals{scale * integral[0], scale * integral[1],
+                          scale * integral[2], scale * integral[3]};
 }
 
 }  // namespace
@@ -305,10 +331,24 @@ double AnalyticPlane::peak_pressure() const {
   return peak_pressure_;
 }
 
+double AnalyticPlane::surface_area() const {
+  return CalcSurfaceIntegrals(radius_squared_coefficients_,
+                              height_coefficients_)
+      .area;
+}
+
 Eigen::Vector3d AnalyticPlane::centroid() const {
-  return Eigen::Vector3d(0.0, 0.0,
-                         SurfaceCentroidHeight(radius_squared_coefficients_,
-                                               height_coefficients_));
+  return Eigen::Vector3d(
+      0.0, 0.0,
+      CalcSurfaceIntegrals(radius_squared_coefficients_, height_coefficients_)
+          .centroid_height());
+}
+
+Eigen::Vector3d AnalyticPlane::pressure_centroid() const {
+  return Eigen::Vector3d(
+      0.0, 0.0,
+      CalcSurfaceIntegrals(radius_squared_coefficients_, height_coefficients_)
+          .pressure_centroid_height());
 }
 
 Eigen::Vector3d AnalyticPlane::normal() const {
@@ -399,10 +439,24 @@ double AnalyticParaboloid::peak_pressure() const {
   return peak_pressure_;
 }
 
+double AnalyticParaboloid::surface_area() const {
+  return CalcSurfaceIntegrals(radius_squared_coefficients_,
+                              height_coefficients_)
+      .area;
+}
+
 Eigen::Vector3d AnalyticParaboloid::centroid() const {
-  return Eigen::Vector3d(0.0, 0.0,
-                         SurfaceCentroidHeight(radius_squared_coefficients_,
-                                               height_coefficients_));
+  return Eigen::Vector3d(
+      0.0, 0.0,
+      CalcSurfaceIntegrals(radius_squared_coefficients_, height_coefficients_)
+          .centroid_height());
+}
+
+Eigen::Vector3d AnalyticParaboloid::pressure_centroid() const {
+  return Eigen::Vector3d(
+      0.0, 0.0,
+      CalcSurfaceIntegrals(radius_squared_coefficients_, height_coefficients_)
+          .pressure_centroid_height());
 }
 
 Eigen::Vector3d AnalyticParaboloid::normal() const {

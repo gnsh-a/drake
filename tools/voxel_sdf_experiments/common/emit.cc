@@ -22,7 +22,8 @@ constexpr std::string_view kCsvHeader =
     "normal_force_relative_error,pressure_error_rms_pa,"
     "pressure_error_max_pa,peak_pressure_pa,reference_peak_pressure_pa,"
     "peak_pressure_relative_error,projected_area_m2,reference_area_m2,"
-    "area_relative_error,total_area_m2,total_area_relative_error,"
+    "area_relative_error,total_area_m2,reference_surface_area_m2,"
+    "total_area_relative_error,"
     "patch_radius_m,reference_patch_radius_m,"
     "patch_radius_relative_error,num_faces,num_vertices,centroid_x_m,"
     "centroid_y_m,centroid_z_m,centroid_position_error_m,"
@@ -100,6 +101,7 @@ void EmitCsv(const std::filesystem::path& path, const RunRecord& record) {
          << metrics.peak_pressure_relative_error << ','
          << metrics.projected_area << ',' << metrics.reference_area << ','
          << metrics.area_relative_error << ',' << metrics.total_area << ','
+         << metrics.reference_surface_area << ','
          << metrics.total_area_relative_error << ',' << metrics.patch_radius
          << ',' << metrics.reference_patch_radius << ','
          << metrics.patch_radius_relative_error << ',' << metrics.num_faces

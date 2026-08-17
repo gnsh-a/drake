@@ -19,11 +19,19 @@ class Reference {
 
   virtual double force() const = 0;
   virtual double area() const = 0;
+  /* Area of the true surface with no projection applied, which exceeds area()
+   by however much the surface tilts away from the reference normal. Compare
+   summed face area against this, and projected face area against area(). */
+  virtual double surface_area() const = 0;
   virtual double distance_to_surface(const Eigen::Vector3d& p_RQ) const = 0;
   virtual double pressure_at(const Eigen::Vector3d& p_RQ) const = 0;
   virtual double patch_radius() const = 0;
   virtual double peak_pressure() const = 0;
   virtual Eigen::Vector3d centroid() const = 0;
+  /* Pressure-weighted centre of pressure. It coincides with centroid() on a
+   flat patch and is pulled toward the peak on a curved one, so a measured
+   centre of pressure must be compared against this rather than centroid(). */
+  virtual Eigen::Vector3d pressure_centroid() const = 0;
   virtual Eigen::Vector3d normal() const = 0;
 };
 
@@ -65,11 +73,13 @@ class AnalyticPlane final : public Reference {
 
   double force() const final;
   double area() const final;
+  double surface_area() const final;
   double distance_to_surface(const Eigen::Vector3d& p_RQ) const final;
   double pressure_at(const Eigen::Vector3d& p_RQ) const final;
   double patch_radius() const final;
   double peak_pressure() const final;
   Eigen::Vector3d centroid() const final;
+  Eigen::Vector3d pressure_centroid() const final;
   Eigen::Vector3d normal() const final;
 
  private:
@@ -98,11 +108,13 @@ class AnalyticParaboloid final : public Reference {
 
   double force() const final;
   double area() const final;
+  double surface_area() const final;
   double distance_to_surface(const Eigen::Vector3d& p_RQ) const final;
   double pressure_at(const Eigen::Vector3d& p_RQ) const final;
   double patch_radius() const final;
   double peak_pressure() const final;
   Eigen::Vector3d centroid() const final;
+  Eigen::Vector3d pressure_centroid() const final;
   Eigen::Vector3d normal() const final;
 
  private:

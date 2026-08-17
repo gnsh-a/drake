@@ -181,6 +181,8 @@ class FineTetReference::Impl {
     Eigen::Vector3d force_R = Eigen::Vector3d::Zero();
     Eigen::Vector3d area_vector_R = Eigen::Vector3d::Zero();
     Eigen::Vector3d centroid_integral_R = Eigen::Vector3d::Zero();
+    Eigen::Vector3d pressure_centroid_integral_R = Eigen::Vector3d::Zero();
+    double pressure_integral = 0.0;
     double total_surface_area = 0.0;
     const auto& pressure = surface_.poly_e_MN();
     for (int face_index = 0; face_index < polygon_mesh_R.num_faces();
@@ -200,6 +202,9 @@ class FineTetReference::Impl {
       force_R += face_area * face_pressure * face_normal_R;
       area_vector_R += face_area * face_normal_R;
       centroid_integral_R += face_area * face_centroid_R;
+      pressure_centroid_integral_R +=
+          face_area * face_pressure * face_centroid_R;
+      pressure_integral += face_area * face_pressure;
       total_surface_area += face_area;
     }
     if (!(total_surface_area > 0.0)) {
@@ -210,9 +215,15 @@ class FineTetReference::Impl {
     // vector preserves that meaning without inventing one representative
     // normal for a curved or multi-lobed contact patch.
     area_ = area_vector_R.norm();
+    surface_area_ = total_surface_area;
     centroid_R_ = centroid_integral_R / total_surface_area;
+    if (!(pressure_integral > 0.0)) {
+      throw std::runtime_error("Fine-tet contact surface carries no pressure");
+    }
+    pressure_centroid_R_ = pressure_centroid_integral_R / pressure_integral;
     if (!(std::isfinite(force_) && force_ > 0.0 && std::isfinite(area_) &&
-          area_ > 0.0 && centroid_R_.allFinite())) {
+          area_ > 0.0 && centroid_R_.allFinite() &&
+          pressure_centroid_R_.allFinite())) {
       throw std::runtime_error("Fine-tet integrated reference is invalid");
     }
   }
@@ -235,7 +246,11 @@ class FineTetReference::Impl {
 
   double force() const { return force_; }
   double area() const { return area_; }
+  double surface_area() const { return surface_area_; }
   const Eigen::Vector3d& centroid() const { return centroid_R_; }
+  const Eigen::Vector3d& pressure_centroid() const {
+    return pressure_centroid_R_;
+  }
 
   double pressure_at(const NearestPoint& nearest) const {
     const int polygon_index = triangle_to_polygon_.at(nearest.triangle_index);
@@ -295,7 +310,9 @@ class FineTetReference::Impl {
   std::unique_ptr<Bvh<Aabb, TriangleSurfaceMesh<double>>> bvh_R_;
   double force_{};
   double area_{};
+  double surface_area_{};
   Eigen::Vector3d centroid_R_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d pressure_centroid_R_{Eigen::Vector3d::Zero()};
 };
 
 FineTetReference::FineTetReference(const geometry::Shape& shape_a,
@@ -321,6 +338,10 @@ double FineTetReference::area() const {
   return impl_->area();
 }
 
+double FineTetReference::surface_area() const {
+  return impl_->surface_area();
+}
+
 double FineTetReference::distance_to_surface(
     const Eigen::Vector3d& p_RQ) const {
   return std::sqrt(impl_->FindNearestPoint(p_RQ).squared_distance);
@@ -342,6 +363,10 @@ double FineTetReference::peak_pressure() const {
 
 Eigen::Vector3d FineTetReference::centroid() const {
   return impl_->centroid();
+}
+
+Eigen::Vector3d FineTetReference::pressure_centroid() const {
+  return impl_->pressure_centroid();
 }
 
 Eigen::Vector3d FineTetReference::normal() const {

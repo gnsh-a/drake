@@ -13,6 +13,9 @@ class SquareReference final : public Reference {
  public:
   double force() const final { return 2.0; }
   double area() const final { return 1.0; }
+  // The patch is flat and lies in the reference plane, so the unprojected area
+  // equals the projected one and the two centroids coincide.
+  double surface_area() const final { return 1.0; }
   double distance_to_surface(const Eigen::Vector3d& p_RQ) const final {
     return std::abs(p_RQ.z());
   }
@@ -20,6 +23,9 @@ class SquareReference final : public Reference {
   double patch_radius() const final { return std::sqrt(0.5); }
   double peak_pressure() const final { return 2.0; }
   Eigen::Vector3d centroid() const final {
+    return Eigen::Vector3d(0.5, 0.5, 0.0);
+  }
+  Eigen::Vector3d pressure_centroid() const final {
     return Eigen::Vector3d(0.5, 0.5, 0.0);
   }
   Eigen::Vector3d normal() const final { return Eigen::Vector3d::UnitZ(); }
