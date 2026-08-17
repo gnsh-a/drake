@@ -2,4 +2,6 @@ load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:private"])
 
-add_lint_tests()
+exports_files(["run_smoke.py"])
+
+add_lint_tests(python_lint_extra_srcs = ["run_smoke.py"])
