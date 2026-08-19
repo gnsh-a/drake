@@ -12,6 +12,16 @@ namespace drake {
 namespace tools {
 namespace voxel_sdf_experiments {
 
+/* The penetration the default load is chosen to produce. The value is
+ 0.08 / 3, picked so the equal-pressure plane never lands on a voxel cell
+ boundary: over a dyadic ladder delta / h is 8/3 times a power of two, and a
+ 1/3 offset is invariant under halving h, so the plane stays 1/3 of a cell off
+ a boundary at every rung. Pass a different target to put it deliberately on
+ one -- 0.02 m sits exactly on an affine cell boundary at every dyadic rung.
+ No single value does that for marching cubes, whose degeneracy is at
+ delta = (2i + 1) h: halving h turns an odd multiple into an even one. */
+constexpr double kDefaultEquilibriumPenetration = 0.08 / 3.0;
+
 enum class SettlingScene { kSphereSphere, kSphereBox };
 
 SettlingScene ParseSettlingScene(std::string_view value);
@@ -29,6 +39,18 @@ struct SettlingConfig {
   double dissipation{3.0};
   double duration{0.0};
   double settling_window{0.0};
+  /* Duration and window in natural periods, used when the corresponding
+   absolute time above is zero. The body reaches its final penetration to
+   within a micrometre by about three periods, so the default carries a wide
+   margin; shortening it is the cheapest way to buy sweep breadth. */
+  double duration_periods{15.0};
+  double settling_window_periods{1.25};
+  /* Write every Nth trajectory sample. Asking for a trajectory at all forces
+   the surface view and its connected-component pass to run at every step
+   rather than only inside the settled window, which is the dominant cost of a
+   trajectory run; striding buys that back. Comparison against a reference
+   requires every run in a study to use the same stride and time step. */
+  int trajectory_stride{1};
   Eigen::Vector3d grid_rpy_deg{Eigen::Vector3d::Zero()};
   std::filesystem::path output;
   std::filesystem::path trajectory;
@@ -59,8 +81,18 @@ struct SettlingResult {
   double max_lateral_offset{};
   double max_angular_speed{};
   double mean_faces{};
+  double faces_span{};
   double mean_contact_area{};
+  double contact_area_span{};
   double largest_component_area_fraction{};
+  double mean_num_components{};
+  /* SAP effort over the settled window. A representation that makes the
+   contact problem harder to solve shows up here rather than in the
+   equilibrium, which is pinned to the load. */
+  double mean_sap_iters{};
+  double max_sap_iters{};
+  double sap_nonconverged_steps{};
+  double max_sap_momentum_residual{};
   double max_penetration{};
   std::optional<double> first_contact_time;
   std::optional<double> first_contact_loss_time;
@@ -74,7 +106,9 @@ struct SettlingResult {
 /* The default load is chosen from the analytic force at 19.9 mm. It is
  scene-dependent, so direct binary invocations of both scenes remain at the
  same operating penetration without transcribed force constants. */
-double DefaultSettlingMass(SettlingScene scene, double hydroelastic_modulus);
+double DefaultSettlingMass(
+    SettlingScene scene, double hydroelastic_modulus,
+    double target_penetration = kDefaultEquilibriumPenetration);
 
 SettlingDerived CalcSettlingDerived(const SettlingConfig& config);
 std::string_view SettlingCsvHeader();

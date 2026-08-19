@@ -21,6 +21,7 @@ drake_cc_library(
         "//geometry:shape_specification",
         "//geometry/query_results:contact_surface",
         "//math:geometric_transform",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
         "//multibody/math:spatial_algebra",
         "//multibody/plant",
         "//multibody/plant:contact_results",

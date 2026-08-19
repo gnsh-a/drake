@@ -30,6 +30,9 @@ def _run_one(
     h_mm: float,
     meshes: bool,
     mass: float | None,
+    trajectories: bool = False,
+    trajectory_stride: int = 1,
+    duration_periods: float | None = None,
 ) -> tuple[pathlib.Path, dict[str, str], str]:
     h_m = h_mm / 1000.0
     stem = f"{scene}__{representation}__h_{_rung_label(h_mm)}mm"
@@ -46,6 +49,13 @@ def _run_one(
         command.append(f"--mass={mass:.17g}")
     if meshes:
         command.append(f"--mesh_output={output_dir / 'meshes' / stem}.vtk")
+    if trajectories:
+        command.append(
+            f"--trajectory={output_dir / 'trajectories' / stem}.csv"
+        )
+        command.append(f"--trajectory_stride={trajectory_stride}")
+    if duration_periods is not None:
+        command.append(f"--duration_periods={duration_periods:.17g}")
     completed = subprocess.run(
         command,
         check=True,
@@ -115,6 +125,40 @@ def main() -> int:
         default="all",
         help="Run both scenes or filter to one scene.",
     )
+    parser.add_argument(
+        "--trajectories",
+        action="store_true",
+        help="Also write a per-step trajectory under OUTPUT_DIR/trajectories. "
+        "Needed to compare transients against a reference; the closed form "
+        "pins only the final penetration, not the path taken to it.",
+    )
+    parser.add_argument(
+        "--trajectory_stride",
+        type=int,
+        default=10,
+        help="Keep every Nth trajectory sample. A trajectory makes the surface "
+        "and connected-component pass run at every written step instead of "
+        "only inside the settled window, so this is what keeps a trajectory "
+        "sweep affordable. Every run in one study must share this value.",
+    )
+    parser.add_argument(
+        "--reference_mm",
+        type=float,
+        default=0.0,
+        help="Also run tetrahedra at this resolution, once per scene, as the "
+        "trajectory reference. The transient has no closed form, so a fine tet "
+        "run stands in for one. 0 disables it. This rung is expensive: cost "
+        "climbs 4-8x per halving.",
+    )
+    parser.add_argument(
+        "--duration_periods",
+        type=float,
+        default=None,
+        help="Simulated duration in natural periods. The body stops moving by "
+        "about three, so the binary's default of 15 is conservative. Note that "
+        "marching cubes loses contact at 9.3 periods on sphere_sphere, so a "
+        "value below that hides the fall-through.",
+    )
     args = parser.parse_args()
 
     binary = args.binary.resolve()
@@ -148,6 +192,11 @@ def main() -> int:
         for representation in REPRESENTATIONS
         for h_mm in rungs
     ]
+    if args.reference_mm > 0.0:
+        # One reference per scene, not per representation: it is the stand-in
+        # for the closed form, so all three are compared against the same one.
+        runs += [(scene, "tet", args.reference_mm) for scene in scenes
+                 if (scene, "tet", args.reference_mm) not in runs]
     mass_description = (
         "scene defaults" if args.mass is None else f"{args.mass} kg"
     )
@@ -169,6 +218,9 @@ def main() -> int:
                 h_mm,
                 args.meshes,
                 args.mass,
+                args.trajectories,
+                args.trajectory_stride,
+                args.duration_periods,
             ): (scene, representation, h_mm)
             for scene, representation, h_mm in runs
         }

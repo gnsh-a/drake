@@ -8,6 +8,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,6 +21,7 @@
 #include "drake/geometry/shape_specification.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/math/roll_pitch_yaw.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
 #include "drake/multibody/math/spatial_algebra.h"
 #include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/coulomb_friction.h"
@@ -55,6 +57,7 @@ using multibody::MultibodyPlant;
 using multibody::RigidBody;
 using multibody::SpatialInertia;
 using multibody::SpatialVelocity;
+using multibody::contact_solvers::internal::SapStatistics;
 using systems::Context;
 using systems::DiagramBuilder;
 using systems::EventStatus;
@@ -73,13 +76,13 @@ const Vector3d kBoxHalfWidths{0.2, 0.2, 0.1};
  halving h, this one value stays 1/3 of a cell off a boundary at every rung.
  A boundary-aligned penetration is a deliberate robustness axis, not a default;
  see contact_plane_voxel_phase in the emitted row. */
-constexpr double kDefaultEquilibriumPenetration = 0.08 / 3.0;
 constexpr double kDegreesToRadians = kPi / 180.0;
 constexpr std::string_view kSettlingCsvHeader =
     "schema_version,git_commit,git_dirty,scene,representation,mass_kg,"
     "voxel_width_m,tet_resolution_hint_m,hydroelastic_modulus_pa,"
     "initial_gap_m,time_step_s,dissipation_s_m,duration_input_s,"
-    "settling_window_input_s,grid_roll_deg,grid_pitch_deg,grid_yaw_deg,"
+    "settling_window_input_s,trajectory_stride,"
+    "grid_roll_deg,grid_pitch_deg,grid_yaw_deg,"
     "weight_N,analytic_equilibrium_penetration_m,contact_stiffness_N_m,"
     "natural_period_s,duration_s,settling_window_s,patch_radius_m,"
     "elements_across_patch,contact_plane_voxel_phase,"
@@ -87,14 +90,18 @@ constexpr std::string_view kSettlingCsvHeader =
     "penetration_relative_error,mean_support_force_N,"
     "mean_support_force_relative_error,penetration_span_m,"
     "max_abs_axial_velocity_m_s,max_lateral_offset_m,"
-    "max_angular_speed_rad_s,mean_faces,mean_contact_area_m2,"
-    "largest_component_area_fraction,max_penetration_m,"
+    "max_angular_speed_rad_s,mean_faces,faces_span,mean_contact_area_m2,"
+    "contact_area_span_m2,largest_component_area_fraction,"
+    "mean_num_components,mean_sap_iters,max_sap_iters,"
+    "sap_nonconverged_steps,max_sap_momentum_residual,max_penetration_m,"
     "first_contact_time_s,first_contact_loss_time_s,steps,wall_time_s,"
     "axial_velocity_settled,penetration_span_settled,settled";
 constexpr std::string_view kTrajectoryCsvHeader =
     "time_s,penetration_m,support_force_N,axial_velocity_m_s,"
     "lateral_offset_m,angular_speed_rad_s,faces,contact_area_m2,"
-    "largest_component_area_fraction,contact";
+    "largest_component_area_fraction,num_components,sap_iters,"
+    "sap_line_search_iters,sap_optimality,sap_cost,sap_momentum_residual,"
+    "contact";
 
 void ThrowUnlessFinitePositive(double value, std::string_view name) {
   if (!(std::isfinite(value) && value > 0.0)) {
@@ -129,6 +136,12 @@ void ValidateConfig(const SettlingConfig& config) {
   ThrowUnlessFinitePositive(config.tet_resolution_hint, "tet_resolution_hint");
   ThrowUnlessFinitePositive(config.hydroelastic_modulus,
                             "hydroelastic_modulus");
+  ThrowUnlessFinitePositive(config.duration_periods, "duration_periods");
+  if (config.trajectory_stride < 1) {
+    throw std::logic_error("trajectory_stride must be at least one");
+  }
+  ThrowUnlessFinitePositive(config.settling_window_periods,
+                            "settling_window_periods");
   ThrowUnlessFiniteNonnegative(config.initial_gap, "initial_gap");
   ThrowUnlessFinitePositive(config.time_step, "time_step");
   ThrowUnlessFiniteNonnegative(config.dissipation, "dissipation");
@@ -150,19 +163,6 @@ ProximityProperties MakeContactProperties(const SettlingConfig& config) {
   return properties;
 }
 
-double CalcLargestComponentAreaFraction(const SurfaceView& surface,
-                                        double total_area) {
-  if (surface.faces.empty()) return 0.0;
-  const std::vector<int> component_ids =
-      CalcFaceComponentIds(surface, DefaultComponentTolerance(surface));
-  std::vector<double> component_areas(surface.faces.size(), 0.0);
-  for (int face = 0; face < std::ssize(surface.faces); ++face) {
-    component_areas[component_ids[face]] += surface.faces[face].area;
-  }
-  return *std::max_element(component_areas.begin(), component_areas.end()) /
-         total_area;
-}
-
 struct Sample {
   double time{};
   double penetration{};
@@ -173,6 +173,13 @@ struct Sample {
   int faces{};
   double contact_area{};
   double largest_component_area_fraction{};
+  int num_components{};
+  int sap_iters{};
+  int sap_line_search_iters{};
+  bool sap_optimality{};
+  bool sap_cost{};
+  double sap_momentum_residual{};
+  bool sap_valid{};
   bool contact{};
 };
 
@@ -186,8 +193,18 @@ struct SettledAccumulator {
   double max_lateral_offset{};
   double max_angular_speed{};
   double faces_sum{};
+  int faces_min{std::numeric_limits<int>::max()};
+  int faces_max{std::numeric_limits<int>::lowest()};
   double contact_area_sum{};
+  double contact_area_min{std::numeric_limits<double>::infinity()};
+  double contact_area_max{-std::numeric_limits<double>::infinity()};
   double largest_component_area_fraction_sum{};
+  double num_components_sum{};
+  int64_t sap_samples{};
+  double sap_iters_sum{};
+  double sap_iters_max{};
+  double sap_nonconverged{};
+  double sap_momentum_residual_max{};
 
   void Add(const Sample& sample) {
     ++samples;
@@ -200,9 +217,24 @@ struct SettledAccumulator {
     max_lateral_offset = std::max(max_lateral_offset, sample.lateral_offset);
     max_angular_speed = std::max(max_angular_speed, sample.angular_speed);
     faces_sum += sample.faces;
+    faces_min = std::min(faces_min, sample.faces);
+    faces_max = std::max(faces_max, sample.faces);
     contact_area_sum += sample.contact_area;
+    contact_area_min = std::min(contact_area_min, sample.contact_area);
+    contact_area_max = std::max(contact_area_max, sample.contact_area);
     largest_component_area_fraction_sum +=
         sample.largest_component_area_fraction;
+    num_components_sum += sample.num_components;
+    if (sample.sap_valid) {
+      ++sap_samples;
+      sap_iters_sum += sample.sap_iters;
+      sap_iters_max = std::max<double>(sap_iters_max, sample.sap_iters);
+      // SAP stops on either criterion; failing both means it ran out of
+      // iterations at this step.
+      if (!sample.sap_optimality && !sample.sap_cost) ++sap_nonconverged;
+      sap_momentum_residual_max =
+          std::max(sap_momentum_residual_max, sample.sap_momentum_residual);
+    }
   }
 };
 
@@ -229,6 +261,11 @@ class TrajectoryWriter final {
             << sample.lateral_offset << ',' << sample.angular_speed << ','
             << sample.faces << ',' << sample.contact_area << ','
             << sample.largest_component_area_fraction << ','
+            << sample.num_components << ',' << sample.sap_iters << ','
+            << sample.sap_line_search_iters << ','
+            << (sample.sap_optimality ? "true" : "false") << ','
+            << (sample.sap_cost ? "true" : "false") << ','
+            << sample.sap_momentum_residual << ','
             << (sample.contact ? "true" : "false") << '\n';
     if (!output_) {
       throw std::runtime_error("Failed while writing trajectory CSV");
@@ -275,11 +312,12 @@ void WriteSettlingCsv(const std::filesystem::path& path,
          << config.tet_resolution_hint << ',' << config.hydroelastic_modulus
          << ',' << config.initial_gap << ',' << config.time_step << ','
          << config.dissipation << ',' << config.duration << ','
-         << config.settling_window << ',' << config.grid_rpy_deg.x() << ','
-         << config.grid_rpy_deg.y() << ',' << config.grid_rpy_deg.z() << ','
-         << derived.weight << ',' << derived.analytic_equilibrium_penetration
-         << ',' << derived.contact_stiffness << ',' << derived.natural_period
-         << ',' << derived.duration << ',' << derived.settling_window << ','
+         << config.settling_window << ',' << config.trajectory_stride << ','
+         << config.grid_rpy_deg.x() << ',' << config.grid_rpy_deg.y() << ','
+         << config.grid_rpy_deg.z() << ',' << derived.weight << ','
+         << derived.analytic_equilibrium_penetration << ','
+         << derived.contact_stiffness << ',' << derived.natural_period << ','
+         << derived.duration << ',' << derived.settling_window << ','
          << derived.patch_radius << ',' << derived.elements_across_patch << ','
          << derived.contact_plane_voxel_phase << ','
          << result.equilibrium_penetration << ',' << result.penetration_error
@@ -288,9 +326,13 @@ void WriteSettlingCsv(const std::filesystem::path& path,
          << result.mean_support_force_relative_error << ','
          << result.penetration_span << ',' << result.max_abs_axial_velocity
          << ',' << result.max_lateral_offset << ',' << result.max_angular_speed
-         << ',' << result.mean_faces << ',' << result.mean_contact_area << ','
+         << ',' << result.mean_faces << ',' << result.faces_span << ','
+         << result.mean_contact_area << ',' << result.contact_area_span << ','
          << result.largest_component_area_fraction << ','
-         << result.max_penetration << ',';
+         << result.mean_num_components << ',' << result.mean_sap_iters << ','
+         << result.max_sap_iters << ',' << result.sap_nonconverged_steps << ','
+         << result.max_sap_momentum_residual << ',' << result.max_penetration
+         << ',';
   WriteOptional(output, result.first_contact_time);
   output << ',';
   WriteOptional(output, result.first_contact_loss_time);
@@ -323,10 +365,12 @@ std::string_view to_string(SettlingScene scene) {
   throw std::logic_error("Invalid SettlingScene value");
 }
 
-double DefaultSettlingMass(SettlingScene scene, double hydroelastic_modulus) {
+double DefaultSettlingMass(SettlingScene scene, double hydroelastic_modulus,
+                           double target_penetration) {
   ThrowUnlessFinitePositive(hydroelastic_modulus, "hydroelastic_modulus");
+  ThrowUnlessFinitePositive(target_penetration, "target_penetration");
   return ForceAtPenetration(MakeReferenceFactory(scene, hydroelastic_modulus),
-                            kDefaultEquilibriumPenetration) /
+                            target_penetration) /
          kGravity;
 }
 
@@ -342,11 +386,13 @@ SettlingDerived CalcSettlingDerived(const SettlingConfig& config) {
   result.contact_stiffness = StiffnessAtPenetration(factory, penetration);
   result.natural_period =
       2.0 * kPi * std::sqrt(config.mass / result.contact_stiffness);
-  result.duration =
-      config.duration == 0.0 ? 15.0 * result.natural_period : config.duration;
-  result.settling_window = config.settling_window == 0.0
-                               ? 1.25 * result.natural_period
-                               : config.settling_window;
+  result.duration = config.duration == 0.0
+                        ? config.duration_periods * result.natural_period
+                        : config.duration;
+  result.settling_window =
+      config.settling_window == 0.0
+          ? config.settling_window_periods * result.natural_period
+          : config.settling_window;
   if (!(result.settling_window <= result.duration)) {
     throw std::logic_error("settling_window must not exceed duration");
   }
@@ -437,7 +483,11 @@ SettlingResult RunSettling(const SettlingConfig& config) {
 
   Simulator<double> simulator(*diagram, std::move(diagram_context));
   simulator.set_target_realtime_rate(0.0);
+  int64_t monitor_calls = 0;
   simulator.set_monitor([&](const Context<double>& root_context) {
+    const bool write_trajectory =
+        !config.trajectory.empty() &&
+        (monitor_calls++ % config.trajectory_stride == 0);
     const Context<double>& current_plant_context =
         plant.GetMyContextFromRoot(root_context);
     const RigidTransformd& X_WB =
@@ -452,6 +502,20 @@ SettlingResult RunSettling(const SettlingConfig& config) {
     sample.angular_speed = V_WB.rotational().norm();
     const bool in_settled_window =
         sample.time + 0.5 * config.time_step >= settled_start;
+
+    // The statistics describe the solve that advances from this state, which
+    // is the same state the surface measures below are taken at.
+    const std::optional<SapStatistics> sap =
+        plant.EvalSapSolverStatistics(current_plant_context);
+    if (sap.has_value()) {
+      sample.sap_valid = true;
+      sample.sap_iters = sap->num_iters;
+      sample.sap_line_search_iters = sap->num_line_search_iters;
+      sample.sap_optimality = sap->optimality_criterion_reached;
+      sample.sap_cost = sap->cost_criterion_reached;
+      sample.sap_momentum_residual =
+          sap->momentum_residual.empty() ? 0.0 : sap->momentum_residual.back();
+    }
 
     const ContactResults<double>& contacts =
         plant.get_contact_results_output_port().Eval<ContactResults<double>>(
@@ -474,12 +538,15 @@ SettlingResult RunSettling(const SettlingConfig& config) {
         throw std::runtime_error(
             "Contact surface type did not match the representation");
       }
-      if (in_settled_window || !config.trajectory.empty()) {
+      if (in_settled_window || write_trajectory) {
         const SurfaceView view = MakeSurfaceView(surface);
         sample.faces = view.faces.size();
         for (const Face& face : view.faces) sample.contact_area += face.area;
+        const ComponentStats components =
+            CalcComponentStats(view, sample.contact_area);
         sample.largest_component_area_fraction =
-            CalcLargestComponentAreaFraction(view, sample.contact_area);
+            components.largest_area_fraction;
+        sample.num_components = components.num_components;
       }
     }
 
@@ -491,7 +558,7 @@ SettlingResult RunSettling(const SettlingConfig& config) {
     }
     max_penetration = std::max(max_penetration, sample.penetration);
     if (in_settled_window) settled.Add(sample);
-    trajectory_writer.Write(sample);
+    if (write_trajectory) trajectory_writer.Write(sample);
     return EventStatus::Succeeded();
   });
 
@@ -521,9 +588,19 @@ SettlingResult RunSettling(const SettlingConfig& config) {
   result.max_lateral_offset = settled.max_lateral_offset;
   result.max_angular_speed = settled.max_angular_speed;
   result.mean_faces = settled.faces_sum / settled.samples;
+  result.faces_span = settled.faces_max - settled.faces_min;
   result.mean_contact_area = settled.contact_area_sum / settled.samples;
+  result.contact_area_span =
+      settled.contact_area_max - settled.contact_area_min;
   result.largest_component_area_fraction =
       settled.largest_component_area_fraction_sum / settled.samples;
+  result.mean_num_components = settled.num_components_sum / settled.samples;
+  if (settled.sap_samples > 0) {
+    result.mean_sap_iters = settled.sap_iters_sum / settled.sap_samples;
+    result.max_sap_iters = settled.sap_iters_max;
+    result.sap_nonconverged_steps = settled.sap_nonconverged;
+    result.max_sap_momentum_residual = settled.sap_momentum_residual_max;
+  }
   result.max_penetration = max_penetration;
   result.first_contact_time = first_contact_time;
   result.first_contact_loss_time = first_contact_loss_time;
