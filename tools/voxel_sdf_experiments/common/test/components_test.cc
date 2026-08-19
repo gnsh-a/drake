@@ -91,6 +91,37 @@ GTEST_TEST(ComponentsTest, NonPositiveToleranceThrows) {
   EXPECT_THROW(CalcFaceComponentIds(surface, -1.0), std::logic_error);
 }
 
+/* CalcComponentStats reports the count and the largest component's share of
+ the area from one labelling pass. Both are checked together because neither is
+ conclusive alone: a count that collapsed to one would leave the fraction
+ reading a perfect 1.0. The faces carry deliberately unequal areas, so a
+ fraction computed by counting faces instead of summing area would fail. */
+GTEST_TEST(ComponentsTest, ComponentStatsCountAndShare) {
+  SurfaceView joined = MakeSharedIndexPair();
+  joined.faces[0].area = 3.0;
+  joined.faces[1].area = 1.0;
+  const ComponentStats joined_stats = CalcComponentStats(joined, 4.0);
+  EXPECT_EQ(joined_stats.num_components, 1);
+  EXPECT_NEAR(joined_stats.largest_area_fraction, 1.0, 1e-14);
+
+  /* The same two faces pulled apart past the tolerance: two components, and
+   the larger holds its own 3 of the 4 units of area rather than all of it. */
+  SurfaceView split = MakeDuplicatedEdgePair(1.0);
+  split.faces[0].area = 3.0;
+  split.faces[1].area = 1.0;
+  const ComponentStats split_stats = CalcComponentStats(split, 4.0);
+  EXPECT_EQ(split_stats.num_components, 2);
+  EXPECT_NEAR(split_stats.largest_area_fraction, 0.75, 1e-14);
+}
+
+/* An empty surface has nothing to label. Returning zeros rather than dividing
+ by a zero total is what keeps a no-contact frame from poisoning a mean. */
+GTEST_TEST(ComponentsTest, ComponentStatsOfAnEmptySurface) {
+  const ComponentStats stats = CalcComponentStats(SurfaceView{}, 0.0);
+  EXPECT_EQ(stats.num_components, 0);
+  EXPECT_EQ(stats.largest_area_fraction, 0.0);
+}
+
 }  // namespace
 }  // namespace voxel_sdf_experiments
 }  // namespace tools

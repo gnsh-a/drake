@@ -24,6 +24,24 @@ double DefaultComponentTolerance(const SurfaceView& surface);
 std::vector<int> CalcFaceComponentIds(const SurfaceView& surface,
                                       double tolerance);
 
+/* Fragmentation of one sampled contact surface.
+
+ `largest_area_fraction` is the largest component's share of the total area and
+ `num_components` is how many components there are. Both come from a single
+ labelling pass because labelling is the expensive part, and they are reported
+ together because neither is conclusive alone: a count that collapsed to one
+ would leave the fraction reading a perfect 1.0, and a fraction near 1.0 with a
+ large count means one component dominates a shower of slivers. */
+struct ComponentStats {
+  double largest_area_fraction{};
+  int num_components{};
+};
+
+/* Returns the fragmentation of `surface`, whose faces sum to `total_area`.
+ An empty surface has no components and a zero fraction. */
+ComponentStats CalcComponentStats(const SurfaceView& surface,
+                                  double total_area);
+
 }  // namespace voxel_sdf_experiments
 }  // namespace tools
 }  // namespace drake

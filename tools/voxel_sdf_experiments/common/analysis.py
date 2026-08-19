@@ -92,11 +92,20 @@ def linear_fit(
     return intercept, slope, residual
 
 
-def read_rows(input_dir: pathlib.Path) -> list[Row]:
-    """Reads version-1, single-row CSVs emitted for individual runs.
+def read_rows(
+    input_dir: pathlib.Path, *, schema_version: str = "2"
+) -> list[Row]:
+    """Reads the single-row CSVs emitted for individual runs.
 
     A ladder driver's ``summary.csv`` is ignored so its copies of the run rows
-    are not counted a second time.
+    are not counted a second time. Reading it as a run is not a harmless
+    duplicate: taking each file's first row admits the summary's first line as
+    an extra rung, which silently double-counts one point in whatever
+    convergence fit contains it.
+
+    ``schema_version`` is the version each row must declare. Studies version
+    their own row format independently, so a caller reading a study that is
+    still on an earlier version says so rather than the check being dropped.
     """
     rows = []
     for path in sorted(input_dir.glob("*.csv")):
@@ -109,8 +118,10 @@ def read_rows(input_dir: pathlib.Path) -> list[Row]:
                 f"{path} has {len(file_rows)} data rows, expected 1"
             )
         row = file_rows[0]
-        if row.get("schema_version") != "2":
-            raise RuntimeError(f"{path} does not use schema version 2")
+        if row.get("schema_version") != schema_version:
+            raise RuntimeError(
+                f"{path} does not use schema version {schema_version}"
+            )
         missing = {
             field
             for field in ("scene", "representation", "voxel_width_m")
@@ -266,6 +277,98 @@ def order_fits(
                 }
             )
     return fits, classifications
+
+
+@dataclasses.dataclass(frozen=True)
+class TrajectoryError:
+    """One column's deviation from a reference trajectory.
+
+    ``scale`` is the largest magnitude the reference itself reaches, so a
+    caller can report a relative error without deciding what to normalize by.
+    """
+
+    rms: float
+    worst: float
+    scale: float
+
+    @property
+    def relative_rms(self) -> float | None:
+        return self.rms / self.scale if self.scale > 0.0 else None
+
+
+def trajectory_error(reference, candidate, column, *, time_tolerance=1e-12):
+    """RMS and max absolute deviation of ``column`` from ``reference``.
+
+    Both arguments are sequences of rows carrying a ``time_s`` column. Returns
+    ``None`` when the two do not share a sample grid: every run of one scene
+    has the same duration, so a mismatch means the runs differ in time step or
+    trajectory stride, and resampling would paper over exactly the discrepancy
+    worth surfacing. Comparing a run against itself is the degenerate case and
+    must give zero error.
+    """
+    if len(reference) != len(candidate) or len(reference) == 0:
+        return None
+    errors = []
+    scale = 0.0
+    for reference_row, candidate_row in zip(reference, candidate):
+        if (
+            abs(float(reference_row["time_s"]) - float(candidate_row["time_s"]))
+            > time_tolerance
+        ):
+            return None
+        expected = float(reference_row[column])
+        errors.append(float(candidate_row[column]) - expected)
+        scale = max(scale, abs(expected))
+    rms = math.sqrt(sum(error * error for error in errors) / len(errors))
+    return TrajectoryError(rms, max(abs(error) for error in errors), scale)
+
+
+def relative_l2(reference, candidate, columns):
+    """Relative L2 error of a trajectory against a reference trajectory.
+
+    ``||x_c - x_r||_2 / ||x_r||_2`` taken jointly over ``columns``, which is
+    the error definition used by Masterjohn et al. for this benchmark. Passing
+    the three position components gives their metric exactly; passing one gives
+    the scalar version.
+
+    Returns ``None`` when the sample grids differ or the reference has no
+    magnitude, for the same reason trajectory_error does: resampling would hide
+    a time-step or stride mismatch rather than surface it.
+    """
+    if len(reference) != len(candidate) or len(reference) == 0:
+        return None
+    numerator = 0.0
+    denominator = 0.0
+    for reference_row, candidate_row in zip(reference, candidate):
+        if (
+            abs(float(reference_row["time_s"]) - float(candidate_row["time_s"]))
+            > 1e-12
+        ):
+            return None
+        for column in columns:
+            expected = float(reference_row[column])
+            difference = float(candidate_row[column]) - expected
+            numerator += difference * difference
+            denominator += expected * expected
+    if denominator <= 0.0:
+        return None
+    return math.sqrt(numerator / denominator)
+
+
+def terminal_value(rows, value_column, *, gate_column, gate_minimum):
+    """The last value whose companion gate is still above ``gate_minimum``.
+
+    The disk's slip-to-spin ratio divides by the spin rate, so it is
+    ill-conditioned once the disk has nearly stopped and the tail of the run
+    must be discarded rather than averaged in. Returns ``None`` when no sample
+    passes the gate, which is itself the signal that a run never reached a
+    meaningful terminal state.
+    """
+    for row in reversed(rows):
+        if abs(float(row[gate_column])) >= gate_minimum:
+            value = float(row[value_column])
+            return value if math.isfinite(value) else None
+    return None
 
 
 def write_csv(

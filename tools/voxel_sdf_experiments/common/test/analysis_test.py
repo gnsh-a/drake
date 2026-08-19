@@ -118,3 +118,158 @@ class AnalysisTest(unittest.TestCase):
         )
         self.assertEqual(fits, [])
         self.assertEqual(classifications[0]["reason"], "saturated")
+
+
+class TrajectoryErrorTest(unittest.TestCase):
+    @staticmethod
+    def _rows(values, *, dt=0.1, column="penetration_m"):
+        return [
+            {"time_s": repr(index * dt), column: repr(value)}
+            for index, value in enumerate(values)
+        ]
+
+    def test_identical_trajectories_have_zero_error(self):
+        rows = self._rows([1.0, 2.0, 3.0])
+        result = analysis.trajectory_error(rows, rows, "penetration_m")
+        self.assertEqual(result.rms, 0.0)
+        self.assertEqual(result.worst, 0.0)
+        self.assertEqual(result.scale, 3.0)
+        self.assertEqual(result.relative_rms, 0.0)
+
+    def test_rms_and_worst_are_taken_over_the_whole_path(self):
+        reference = self._rows([0.0, 0.0, 0.0, 0.0])
+        candidate = self._rows([3.0, -4.0, 0.0, 0.0])
+        result = analysis.trajectory_error(
+            reference, candidate, "penetration_m"
+        )
+        # RMS of (3, -4, 0, 0) is sqrt(25 / 4).
+        self.assertAlmostEqual(result.rms, 2.5)
+        self.assertEqual(result.worst, 4.0)
+        # An all-zero reference has no scale, so there is no relative error to
+        # report rather than a division by zero.
+        self.assertEqual(result.scale, 0.0)
+        self.assertIsNone(result.relative_rms)
+
+    def test_worst_is_not_the_last_or_largest_signed_error(self):
+        """A max over signed errors, or a final-value check, would miss this."""
+        reference = self._rows([0.0, 0.0, 0.0])
+        candidate = self._rows([0.0, -9.0, 1.0])
+        result = analysis.trajectory_error(
+            reference, candidate, "penetration_m"
+        )
+        self.assertEqual(result.worst, 9.0)
+
+    def test_differing_lengths_refuse_to_compare(self):
+        self.assertIsNone(
+            analysis.trajectory_error(
+                self._rows([1.0, 2.0, 3.0]),
+                self._rows([1.0, 2.0]),
+                "penetration_m",
+            )
+        )
+
+    def test_differing_sample_times_refuse_to_compare(self):
+        """A stride or time-step mismatch must not be silently interpolated."""
+        self.assertIsNone(
+            analysis.trajectory_error(
+                self._rows([1.0, 2.0, 3.0], dt=0.1),
+                self._rows([1.0, 2.0, 3.0], dt=0.2),
+                "penetration_m",
+            )
+        )
+
+    def test_empty_trajectories_refuse_to_compare(self):
+        self.assertIsNone(analysis.trajectory_error([], [], "penetration_m"))
+
+    def test_relative_rms_normalizes_by_the_reference_scale(self):
+        reference = self._rows([10.0, 20.0])
+        candidate = self._rows([11.0, 21.0])
+        result = analysis.trajectory_error(
+            reference, candidate, "penetration_m"
+        )
+        self.assertAlmostEqual(result.rms, 1.0)
+        self.assertAlmostEqual(result.relative_rms, 1.0 / 20.0)
+
+
+class RelativeL2Test(unittest.TestCase):
+    @staticmethod
+    def _rows(triples, dt=0.1):
+        return [
+            {
+                "time_s": repr(index * dt),
+                "x": repr(x),
+                "y": repr(y),
+                "z": repr(z),
+            }
+            for index, (x, y, z) in enumerate(triples)
+        ]
+
+    def test_identical_trajectories_have_zero_error(self):
+        rows = self._rows([(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)])
+        self.assertEqual(analysis.relative_l2(rows, rows, ("x", "y", "z")), 0.0)
+
+    def test_error_is_joint_over_all_columns(self):
+        reference = self._rows([(3.0, 4.0, 0.0)])
+        candidate = self._rows([(3.0, 4.0, 5.0)])
+        # ||(0,0,5)|| / ||(3,4,0)|| = 5 / 5 = 1.
+        self.assertAlmostEqual(
+            analysis.relative_l2(reference, candidate, ("x", "y", "z")), 1.0
+        )
+
+    def test_single_column_is_the_scalar_version(self):
+        reference = self._rows([(2.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
+        candidate = self._rows([(3.0, 0.0, 0.0), (1.0, 0.0, 0.0)])
+        # ||(1,-1)|| / ||(2,2)|| = sqrt(2) / sqrt(8) = 0.5.
+        self.assertAlmostEqual(
+            analysis.relative_l2(reference, candidate, ("x",)), 0.5
+        )
+
+    def test_grid_mismatch_refuses_to_compare(self):
+        # Two samples are needed for a stride mismatch to be visible at all;
+        # both grids agree at t = 0 and only diverge afterwards.
+        pairs = [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)]
+        self.assertIsNone(
+            analysis.relative_l2(
+                self._rows(pairs, dt=0.1),
+                self._rows(pairs, dt=0.2),
+                ("x",),
+            )
+        )
+
+    def test_zero_reference_has_no_relative_error(self):
+        zeros = self._rows([(0.0, 0.0, 0.0)])
+        self.assertIsNone(analysis.relative_l2(zeros, zeros, ("x", "y", "z")))
+
+
+class TerminalValueTest(unittest.TestCase):
+    @staticmethod
+    def _rows(pairs):
+        return [
+            {"eps": repr(eps), "omega": repr(omega)} for eps, omega in pairs
+        ]
+
+    def test_takes_the_last_sample_above_the_gate(self):
+        rows = self._rows([(1.0, 12.0), (0.7, 5.0), (0.65, 0.4), (9.9, 0.01)])
+        self.assertAlmostEqual(
+            analysis.terminal_value(
+                rows, "eps", gate_column="omega", gate_minimum=0.1
+            ),
+            0.65,
+        )
+
+    def test_gate_uses_magnitude_not_sign(self):
+        rows = self._rows([(1.0, 12.0), (0.6, -5.0)])
+        self.assertAlmostEqual(
+            analysis.terminal_value(
+                rows, "eps", gate_column="omega", gate_minimum=0.1
+            ),
+            0.6,
+        )
+
+    def test_no_sample_passes_the_gate(self):
+        rows = self._rows([(1.0, 0.01), (2.0, 0.005)])
+        self.assertIsNone(
+            analysis.terminal_value(
+                rows, "eps", gate_column="omega", gate_minimum=0.1
+            )
+        )

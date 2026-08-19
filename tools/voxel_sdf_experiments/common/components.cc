@@ -124,6 +124,29 @@ std::vector<int> CalcFaceComponentIds(const SurfaceView& surface,
   return ids;
 }
 
+ComponentStats CalcComponentStats(const SurfaceView& surface,
+                                  double total_area) {
+  if (surface.faces.empty()) return {};
+  std::vector<int> component_ids =
+      CalcFaceComponentIds(surface, DefaultComponentTolerance(surface));
+  std::vector<double> component_areas(surface.faces.size(), 0.0);
+  for (int face = 0; face < std::ssize(surface.faces); ++face) {
+    component_areas[component_ids[face]] += surface.faces[face].area;
+  }
+  ComponentStats stats;
+  stats.largest_area_fraction =
+      *std::max_element(component_areas.begin(), component_areas.end()) /
+      total_area;
+  // The ids are arbitrary but consistent, so the number of distinct ids is the
+  // number of components. Counting nonzero areas instead would miss a
+  // component whose faces are all degenerate.
+  std::sort(component_ids.begin(), component_ids.end());
+  stats.num_components =
+      std::unique(component_ids.begin(), component_ids.end()) -
+      component_ids.begin();
+  return stats;
+}
+
 }  // namespace voxel_sdf_experiments
 }  // namespace tools
 }  // namespace drake
