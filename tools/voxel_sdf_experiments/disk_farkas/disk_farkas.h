@@ -109,6 +109,13 @@ struct DiskFarkasRow {
   double contact_area{};
   int surface_vertices{};
   int surface_faces{};
+  /* Fragmentation of the patch at this frame. No prior disk study measured
+   this. It matters here in a way it did not for frictionless settling: a
+   friction cone couples the patch tangentially, so a surface that arrives as
+   independent slivers has a mechanism to alter the slip-spin coupling that a
+   normal-load-only test cannot see. */
+  int num_components{};
+  double largest_component_area_fraction{};
   double normal_force_z{};
   double friction_force_x{};
   double friction_force_y{};

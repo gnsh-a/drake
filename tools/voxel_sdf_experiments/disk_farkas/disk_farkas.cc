@@ -24,7 +24,9 @@
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/context.h"
 #include "drake/systems/framework/diagram_builder.h"
+#include "drake/tools/voxel_sdf_experiments/common/components.h"
 #include "drake/tools/voxel_sdf_experiments/common/emit.h"
+#include "drake/tools/voxel_sdf_experiments/common/surface_view.h"
 
 namespace drake {
 namespace tools {
@@ -60,7 +62,8 @@ constexpr std::string_view kCsvHeader =
     "wx_rad_s,wy_rad_s,wz_rad_s,vx_m_s,vy_m_s,vz_m_s,angular_speed_rad_s,"
     "linear_speed_m_s,point_contacts,hydro_contacts,contact_force_x_N,"
     "contact_force_y_N,contact_force_z_N,contact_area_m2,surface_vertices,"
-    "surface_faces,normal_force_z_N,friction_force_x_N,friction_force_y_N,"
+    "surface_faces,num_components,largest_component_area_fraction,"
+    "normal_force_z_N,friction_force_x_N,friction_force_y_N,"
     "friction_torque_z_Nm,eps,post_kick";
 
 void ThrowUnlessFinitePositive(double value, std::string_view name) {
@@ -239,6 +242,16 @@ DiskFarkasRow SampleRow(const BuiltScene& scene,
       row.surface_faces += surface.poly_mesh_W().num_faces();
     }
 
+    // Fragmentation is per surface, and the disk scene produces one, so the
+    // count is summed and the fraction is taken from the largest patch seen.
+    const SurfaceView view = MakeSurfaceView(surface);
+    double view_area = 0.0;
+    for (const Face& face : view.faces) view_area += face.area;
+    const ComponentStats components = CalcComponentStats(view, view_area);
+    row.num_components += components.num_components;
+    row.largest_component_area_fraction = std::max(
+        row.largest_component_area_fraction, components.largest_area_fraction);
+
     SpatialForce<double> F_C_W = info.F_Ac_W();
     const bool disk_is_body_a =
         ContainsGeometryId(scene.disk_geometries, surface.id_M());
@@ -305,8 +318,9 @@ void WriteCsv(const DiskFarkasConfig& config,
            << row.hydro_contacts << ',' << row.contact_force_W.x() << ','
            << row.contact_force_W.y() << ',' << row.contact_force_W.z() << ','
            << row.contact_area << ',' << row.surface_vertices << ','
-           << row.surface_faces << ',' << row.normal_force_z << ','
-           << row.friction_force_x << ',' << row.friction_force_y << ','
+           << row.surface_faces << ',' << row.num_components << ','
+           << row.largest_component_area_fraction << ',' << row.normal_force_z
+           << ',' << row.friction_force_x << ',' << row.friction_force_y << ','
            << row.friction_torque_z << ',' << row.eps << ','
            << (row.post_kick ? "true" : "false") << '\n';
   }

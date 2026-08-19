@@ -101,6 +101,68 @@ GTEST_TEST(DiskFarkasTest, AllRepresentationsSettleSlideSpinAndDecay) {
   }
 }
 
+/* The initial slip-to-spin ratio is what the invariance study sweeps, and it
+ is set indirectly: eps0 = |v| / (omega_z * R), so a driver picks a slide for a
+ fixed spin. If the scene override were dropped the run would still produce a
+ plausible trajectory at the YAML's own ratio, so this pins that the requested
+ ratio is the one actually simulated. */
+GTEST_TEST(DiskFarkasTest, SceneOverridesSetTheInitialRatio) {
+  constexpr double kRadius = 0.01213;
+  constexpr double kSpin = 12.0;
+  for (const double target : {0.75, 2.0}) {
+    DiskFarkasConfig config = MakeSmokeConfig(Representation::kPlaneClip);
+    config.num_frames = 20;
+    config.scene.disk.initial_linear_velocity =
+        Eigen::Vector3d(target * kSpin * kRadius, 0.0, 0.0);
+    config.scene.disk.initial_angular_velocity =
+        Eigen::Vector3d(0.0, 0.0, kSpin);
+    config.output = ScratchPath("eps0_" + std::to_string(target) + ".csv");
+    const DiskFarkasResult result = RunDiskFarkas(config);
+    EXPECT_NEAR(result.initial_epsilon, target, 1e-3) << target;
+  }
+}
+
+/* Fragmentation of the contact patch, newly recorded here. The disk's flat
+ face against a flat box is the geometry least likely to fragment, and the
+ affine kernel does return one conforming component on it -- unlike the curved
+ sphere contact in the settling study, where the same kernel shatters into
+ hundreds. That contrast is the finding; what would be a regression is the
+ columns going empty. */
+GTEST_TEST(DiskFarkasTest, FragmentationIsRecordedPerFrame) {
+  DiskFarkasConfig config = MakeSmokeConfig(Representation::kPlaneClip);
+  config.num_frames = 20;
+  config.output = ScratchPath("fragmentation.csv");
+  const DiskFarkasResult result = RunDiskFarkas(config);
+
+  int frames_with_contact = 0;
+  for (const DiskFarkasRow& row : result.rows) {
+    if (row.surface_faces == 0) continue;
+    ++frames_with_contact;
+    EXPECT_GE(row.num_components, 1);
+    EXPECT_GT(row.largest_component_area_fraction, 0.0);
+    EXPECT_LE(row.largest_component_area_fraction, 1.0 + 1e-12);
+    /* One component must hold all of the area; many cannot. */
+    if (row.num_components == 1) {
+      EXPECT_NEAR(row.largest_component_area_fraction, 1.0, 1e-9);
+    }
+  }
+  EXPECT_GT(frames_with_contact, 0);
+
+  /* The header and every row must agree on width, including the two new
+   columns. */
+  std::ifstream input(config.output);
+  ASSERT_TRUE(input);
+  std::string header;
+  ASSERT_TRUE(static_cast<bool>(std::getline(input, header)));
+  EXPECT_NE(header.find("num_components"), std::string::npos);
+  EXPECT_NE(header.find("largest_component_area_fraction"), std::string::npos);
+  const auto commas = std::count(header.begin(), header.end(), ',');
+  std::string row;
+  while (std::getline(input, row)) {
+    ASSERT_EQ(std::count(row.begin(), row.end(), ','), commas);
+  }
+}
+
 }  // namespace
 }  // namespace voxel_sdf_experiments
 }  // namespace tools

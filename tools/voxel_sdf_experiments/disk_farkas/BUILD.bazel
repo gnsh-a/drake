@@ -34,8 +34,10 @@ drake_cc_library(
         "//systems/analysis:simulator",
         "//systems/framework:context",
         "//systems/framework:diagram_builder",
+        "//tools/voxel_sdf_experiments/common:components",
         "//tools/voxel_sdf_experiments/common:emit",
         "//tools/voxel_sdf_experiments/common:representation",
+        "//tools/voxel_sdf_experiments/common:surface_view",
     ],
 )
 
