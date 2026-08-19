@@ -496,6 +496,17 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "sap_solver_statistics_test",
+    deps = [
+        ":plant",
+        "//geometry:proximity_properties",
+        "//geometry:scene_graph",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram_builder",
+    ],
+)
+
+drake_cc_googletest(
     name = "sap_driver_test",
     deps = [
         ":compliant_contact_manager_tester",

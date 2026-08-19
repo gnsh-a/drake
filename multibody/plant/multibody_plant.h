@@ -21,6 +21,7 @@
 #include "drake/geometry/scene_graph.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/multibody/contact_solvers/contact_solver_results.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
 #include "drake/multibody/plant/constraint_specs.h"
 #include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/coulomb_friction.h"
@@ -2566,6 +2567,22 @@ class MultibodyPlant final : public internal::MultibodyTreeSystem<T> {
   /// @returns the SAP near rigid regime threshold.
   /// @see See set_sap_near_rigid_threshold().
   double get_sap_near_rigid_threshold() const;
+
+  /// Returns SAP solver statistics for one discrete update, when available.
+  /// The statistics are those of the contact solve itself, taken from the
+  /// results that update produces.
+  ///
+  /// Which update they describe depends on the output mode. With sampled
+  /// output ports they come from the most recent completed update, and this
+  /// method does not solve contact again. With live output ports there is no
+  /// step memory to read, so they come from the contact-solver results at
+  /// `context` -- the update that advances from it, rather than the one that
+  /// produced it. The two conventions are offset by one step.
+  ///
+  /// Returns std::nullopt for continuous plants, non-SAP discrete contact
+  /// solvers, and, in sampled mode, before the first discrete update.
+  std::optional<contact_solvers::internal::SapStatistics>
+  EvalSapSolverStatistics(const systems::Context<T>& context) const;
 
   /// Return the default value for contact representation, given the desired
   /// time step. Discrete systems default to use polygons; continuous systems

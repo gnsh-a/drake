@@ -920,6 +920,36 @@ double MultibodyPlant<T>::get_sap_near_rigid_threshold() const {
 }
 
 template <typename T>
+std::optional<contact_solvers::internal::SapStatistics>
+MultibodyPlant<T>::EvalSapSolverStatistics(
+    const systems::Context<T>& context) const {
+  this->ValidateContext(context);
+  if (!is_discrete()) {
+    return std::nullopt;
+  }
+  if (get_discrete_contact_solver() != DiscreteContactSolver::kSap) {
+    return std::nullopt;
+  }
+  if (!use_sampled_output_ports_) {
+    // Live mode keeps no step memory, but the statistics ride on the same
+    // ContactSolverResults the manager caches, so they are still reachable.
+    // The meaning shifts by one step: this is the solve that advances from
+    // `context`, where sampled mode reports the one that produced it.
+    if (discrete_update_manager_ == nullptr) {
+      return std::nullopt;
+    }
+    return discrete_update_manager_->EvalContactSolverResults(context)
+        .sap_statistics;
+  }
+  const DiscreteStepMemory::Data<T>* const memory =
+      get_discrete_step_memory(context);
+  if (memory == nullptr) {
+    return std::nullopt;
+  }
+  return memory->contact_solver_results.sap_statistics;
+}
+
+template <typename T>
 ContactModel MultibodyPlant<T>::get_contact_model() const {
   return contact_model_;
 }

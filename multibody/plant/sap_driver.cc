@@ -1142,6 +1142,7 @@ void SapDriver<T>::CalcContactSolverResults(
       EvalContactProblemCache(context);
   PackContactSolverResults(context, *contact_problem_cache.sap_problem,
                            num_contacts, sap_results, results);
+  results->sap_statistics = sap_results.statistics;
 }
 
 template <typename T>

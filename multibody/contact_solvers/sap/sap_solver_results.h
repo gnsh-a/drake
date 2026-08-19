@@ -2,6 +2,7 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/eigen_types.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
 
 namespace drake {
 namespace multibody {
@@ -34,6 +35,9 @@ struct SapSolverResults {
   // Vector of generalized impulses j = Jᵀ⋅γ due to constraints, where J is the
   // contact Jacobian. Of size `num_velocities`.
   VectorX<T> j;
+
+  // Solver statistics from the solve that produced these results.
+  SapStatistics statistics;
 };
 
 }  // namespace internal
