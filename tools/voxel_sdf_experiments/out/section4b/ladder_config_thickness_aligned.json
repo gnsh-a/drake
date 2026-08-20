@@ -1,56 +1,85 @@
 {
   "name": "section4b_disk_farkas_thickness_aligned",
   "purpose": [
-    "A second grid ladder for the same disk benchmark, chosen against the",
-    "disk's thickness rather than by halving. It replaces the dyadic ladder as",
-    "the basis for the spatial convergence fits; the dyadic one stays because",
-    "the reversal it exposes is the evidence for why this one exists."
+    "Seven extra grid rungs for the disk benchmark, at h = 1.75/n mm. They",
+    "were run to test a hypothesis about why marching cubes' patch area moves",
+    "backwards under refinement. The hypothesis was falsified by these runs.",
+    "The rungs are kept and used, for a different reason than they were run."
   ],
   "supplements": "ladder_config.json",
+  "status": "hypothesis falsified; rungs retained for range and density",
 
-  "motivation": {
-    "problem": [
-      "The isotropic voxel grid spans the disk's 1.75 mm thickness with about",
-      "1.75/h cells, and the rim -- where the whole area error lives -- is",
-      "resolved only as well as that count. The dyadic ladder resolves the",
-      "thickness with 1, 1, 2, 3, 6 and 12 cells: it repeats 1, then skips 4,",
-      "5, and 7 through 11. Halving h therefore does not halve the rim error,",
-      "and between the first two rungs it does not reduce it at all.",
-      "Marching cubes reads 0.757 then 0.636 of exact area across those two,",
-      "so refinement moves the answer away from the truth. An analysis gate",
-      "excluded them from the fits, which left marching cubes with three error",
-      "points spanning one factor of four in h -- too thin to distinguish an",
-      "order from a transition."
+  "the_hypothesis": {
+    "observation": [
+      "On the dyadic ladder marching cubes reads 3.500e-4 m^2 of patch area at",
+      "5 mm and 2.940e-4 at 2.5 mm: refinement moving the answer away from the",
+      "truth. An analysis gate excluded rungs on that reversal, which left",
+      "marching cubes three error points over one factor of four in h."
     ],
-    "fix": [
-      "Choose h = 1.75/n. Every rung then resolves the thickness with n cells,",
-      "strictly increasing, so no reversal is possible and the gate never",
-      "fires. Seven rungs give six error points per representation against the",
-      "dyadic ladder's three for marching cubes, over the same range of h.",
-      "Trimming the dyadic ladder instead would not have helped: dropping the",
-      "two one-cell rungs leaves exactly the four the gate already kept."
+    "claim": [
+      "The isotropic grid spans the disk's 1.75 mm thickness with about 1.75/h",
+      "cells, and the rim -- where the area error lives -- is resolved only as",
+      "well as that count. The dyadic ladder gives 1, 1, 2, 3, 6, 12 cells: it",
+      "repeats one and skips four, five, and seven through eleven. If area is",
+      "governed by that count, then h = 1.75/n makes the count strictly",
+      "increasing, no reversal is possible, and the gate never fires."
+    ],
+    "prediction": [
+      "Two rungs with the same thickness-cell count should read the same area."
     ]
   },
+
+  "the_falsification": {
+    "test": "The denser ladder produces equal-cell-count pairs at different h.",
+    "measured_mean_patch_area_m2": {
+      "2_cells": {"h_1.25mm": 3.862190e-4, "h_0.875mm": 3.920885e-4},
+      "4_cells": {"h_0.58333mm": 4.400893e-4, "h_0.4375mm": 4.288378e-4},
+      "6_cells": {"h_0.3125mm": 4.432011e-4, "h_0.29167mm": 4.400145e-4}
+    },
+    "verdict": [
+      "Equal-cell-count pairs disagree by up to 2.6 percent, and in two of the",
+      "three pairs the COARSER rung is closer to exact. Patch area is not a",
+      "function of thickness resolution, so the reversals are scatter rather",
+      "than under-resolution.",
+      "The gate built on that premise is therefore deleted, not merely unused:",
+      "a rule that discards rungs on reversal keeps whichever tail happened to",
+      "come out monotone. Do not reinstate it. Marching cubes' rim deficit is",
+      "about one cell and resolution-independent, with scatter that remains",
+      "unexplained; the phase hypothesis for that scatter is untested and is",
+      "deliberately kept out of the paper."
+    ],
+    "second_failure": [
+      "Fitting the aligned ladder on its own also fails, for an unrelated",
+      "reason: it spans only 6x in h, and per-interval scatter swamps the",
+      "slope -- it gave a tetrahedral residual of 0.223 and a marching-cubes",
+      "order of -0.485. Range, not sampling density, is what the fit needs."
+    ],
+    "rounding_caveat_that_materialized": [
+      "The grid is positioned by the ground box rather than by the disk, so the",
+      "thickness spans n or n+1 cells depending on phase. h = 1.75/12 rounded",
+      "to 0.145833 gives 13 cells by ceil, not 12. The caveat was recorded",
+      "before the run and then happened."
+    ]
+  },
+
+  "what_the_rungs_are_actually_for": [
+    "Combined with the dyadic ladder they give 17 tetrahedral rungs over a 250x",
+    "span and 13 affine rungs over 32x, which is the range the order fits need.",
+    "The analysis now fits all rungs and refuses to name an order unless the",
+    "error fell at least tenfold, which is what replaced the gate."
+  ],
 
   "rungs": {
     "rule": "h = 1.75/n mm",
     "n": [2, 3, 4, 6, 8, 10, 12],
     "h_mm": [0.875, 0.583333, 0.4375, 0.291667, 0.21875, 0.175, 0.145833],
-    "thickness_cells": [2, 3, 4, 6, 8, 10, 12],
-    "why_no_n5_n7_n9_n11": [
-      "Cost grows like h^-3 while the information gained per rung falls, so",
-      "the ladder thins out at the expensive end. n = 2, 3, 4 are nearly free",
-      "and are kept adjacent; beyond that every second value is enough to read",
-      "a local order.",
-      "n = 14 would be the next rung and is estimated at 83 GB, past what this",
-      "machine holds alongside anything else. The per-representation floor in",
-      "the driver is set to 0.1458 mm for that reason."
-    ],
-    "caveat": [
-      "The grid is positioned by the ground box, not by the disk, so the",
-      "thickness spans n or n+1 cells depending on where the disk sits in the",
-      "grid. h = 1.75/n makes the count monotone in n, which is what the fits",
-      "need; it does not pin it to exactly n."
+    "why_not_finer": [
+      "n = 14 is estimated at 83 GB, past what this machine holds alongside",
+      "anything else. The per-representation floor in the driver is 0.1458 mm",
+      "for that reason. Marching cubes needs finer than that: its terminal",
+      "ratio is still climbing at the finest affordable rung, so it has no",
+      "converged reference and self-referencing measures the reference's own",
+      "error. No order is reported for it."
     ]
   },
 
@@ -59,31 +88,26 @@
     "Time step 1.25e-4 s and 400 post-kick frames at 2000 fps.",
     "Reference rule: each representation against its own finest run.",
     "The terminal-ratio gate at |omega| >= 0.1 rad/s.",
-    "The dt and eps0 sweeps, which this run does not touch."
+    "The dt and eps0 sweeps, which this run did not touch."
   ],
 
   "cost": {
+    "memory_gb": "0.032 + 0.162 / h_mm^3, as measured for the dyadic ladder",
+    "predicted_gb": [0.27, 0.85, 1.97, 6.56, 15.51, 30.26, 52.27],
     "wall_time_model_s": {
       "plane_clip": "9.2 * h_mm^-2.19",
       "marching_cubes": "8.4 * h_mm^-2.13",
       "tet": "5.6 * h_mm^-0.94"
     },
     "fitted_from": [
-      "The dyadic grid sweep's own wall times. Only the two 0.15625 mm runs",
-      "were uncontended, so the exponents come from contended runs and are",
-      "used for scheduling rather than reported as cost."
+      "The dyadic sweep's own wall times, most of them contended, so the",
+      "exponents are for scheduling and are not reported as cost."
     ],
-    "memory_gb": "0.032 + 0.162 / h_mm^3, as measured for the dyadic ladder",
-    "predicted_gb": [0.27, 0.85, 1.97, 6.56, 15.51, 30.26, 52.27],
     "schedule": [
-      "21 runs. All seven tetrahedral rungs together are under two minutes and",
-      "3.5 GB. The two coarsest voxel rungs per representation are under a",
-      "minute each. The n = 10 and n = 12 rungs hold 166 GB between them and",
-      "account for most of the wall clock.",
-      "Run with --memory_budget_gb 120 and --solo_gb 200 so nothing is forced",
-      "to run alone: about 18 minutes, against 51 serial. A 180 GB budget",
-      "reaches the floor of 11 minutes -- the single longest run -- but leaves",
-      "too little of the machine free to be worth it."
+      "21 runs at --memory_budget_gb 120 --solo_gb 200 --jobs 10, about 18",
+      "minutes against 51 serial. All seven tetrahedral rungs together are",
+      "under two minutes and 3.5 GB; the n = 10 and n = 12 rungs hold 166 GB",
+      "between them and account for most of the wall clock."
     ]
   },
 
@@ -102,11 +126,10 @@
     "note": [
       "The driver writes manifest.csv with only the cases of one invocation,",
       "truncating rather than merging, so a partial sweep destroys the record",
-      "of every earlier one. Runs here merge it back by hand afterwards. That",
-      "is a defect in the driver, recorded so the next partial sweep does not",
-      "learn it the same way.",
-      "Results share the output directory with the dyadic ladder. The two are",
-      "distinguished by rung, not by directory, and both are in the manifest."
+      "of every earlier one. Runs here merge it back by hand afterwards; it now",
+      "carries 79 rows across both ladders, distinguished by rung rather than",
+      "by directory. That is a defect in the driver, recorded so the next",
+      "partial sweep does not learn it the same way."
     ]
   }
 }
