@@ -549,6 +549,48 @@ GTEST_TEST(VoxelSdfMarchingCubesContactTest, FlatDiskRimIsPinnedToTheGrid) {
   EXPECT_LT(fine_error, 0.1 * std::abs(fine.plain / exact_area - 1.0));
 }
 
+/* Two spheres have no surface edge anywhere, so nothing pins the rim to the
+ grid and plain marching cubes is already accurate. Projecting the rim there
+ is a Newton step onto the intersection of the two tangent planes, which is a
+ curved boundary's straight local model rather than an exact one. It must not
+ make an already-good patch worse. It does in fact help here as well, cutting
+ the area error from 1.9e-3 to 4.1e-4, but the guarantee this test defends is
+ only the weaker one. */
+GTEST_TEST(VoxelSdfMarchingCubesContactTest, SmoothPatchIsNotHarmedByRimProjection) {
+  constexpr double kRadius = 1.0;
+  constexpr double kVoxelWidth = 0.05;
+  const Vector3d p_AB_A(1.5, 0.15, 0.1);
+  const double separation = p_AB_A.norm();
+  const double exact_area = std::numbers::pi *
+                            (kRadius * kRadius - 0.25 * separation * separation);
+
+  double plain_error = 0.0;
+  double exact_rim_error = 0.0;
+  for (const VoxelSdfExtractionMethod method :
+       {VoxelSdfExtractionMethod::kMarchingCubes,
+        VoxelSdfExtractionMethod::kMarchingCubesExactRim}) {
+    const VoxelSdfGeometry A(Sphere(kRadius), kVoxelWidth, 100.0,
+                             VoxelSdfEvaluationMode::kPrimitiveSdf, method);
+    const VoxelSdfGeometry B(Sphere(kRadius), kVoxelWidth, 100.0,
+                             VoxelSdfEvaluationMode::kPrimitiveSdf, method);
+    const std::unique_ptr<ContactSurface<double>> surface =
+        method == VoxelSdfExtractionMethod::kMarchingCubes
+            ? CalcVoxelSdfMarchingCubesContact(
+                  A, math::RigidTransformd(), GeometryId::get_new_id(), B,
+                  math::RigidTransformd(p_AB_A), GeometryId::get_new_id())
+            : CalcVoxelSdfMarchingCubesExactRimContact(
+                  A, math::RigidTransformd(), GeometryId::get_new_id(), B,
+                  math::RigidTransformd(p_AB_A), GeometryId::get_new_id());
+    ASSERT_NE(surface, nullptr);
+    ExpectValidMarchingCubesSurface(*surface);
+    (method == VoxelSdfExtractionMethod::kMarchingCubes ? plain_error
+                                                        : exact_rim_error) =
+        std::abs(surface->tri_mesh_W().total_area() / exact_area - 1.0);
+  }
+  EXPECT_LT(plain_error, 0.02);
+  EXPECT_LE(exact_rim_error, plain_error + 1e-3);
+}
+
 }  // namespace
 }  // namespace hydroelastic
 }  // namespace internal
