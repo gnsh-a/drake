@@ -47,8 +47,11 @@ DEFAULT_TET_EXTRA_RUNGS_MM = (0.08, 0.04, 0.02, 0.012)
 # Per-representation floors, in mm. Voxel grids are memory bound; tet is not.
 FINEST_ALLOWED_MM = {
     "tet": 0.012,
-    "plane_clip": 0.15625,
-    "marching_cubes": 0.15625,
+    # 1.75/12 mm, the finest thickness-aligned rung, measured at 52 GB. The
+    # next one down is 1.75/14 at 83 GB, which is past what this machine can
+    # hold alongside anything else.
+    "plane_clip": 0.1458,
+    "marching_cubes": 0.1458,
 }
 DEFAULT_TIME_STEPS_MS = (2.0, 1.0, 0.5, 0.25, 0.125, 0.0625)
 # The paper sweeps eps0 over [0.1, 10]. The extremes are out of reach here: a
