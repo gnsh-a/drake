@@ -1,0 +1,112 @@
+{
+  "name": "section4b_disk_farkas_thickness_aligned",
+  "purpose": [
+    "A second grid ladder for the same disk benchmark, chosen against the",
+    "disk's thickness rather than by halving. It replaces the dyadic ladder as",
+    "the basis for the spatial convergence fits; the dyadic one stays because",
+    "the reversal it exposes is the evidence for why this one exists."
+  ],
+  "supplements": "ladder_config.json",
+
+  "motivation": {
+    "problem": [
+      "The isotropic voxel grid spans the disk's 1.75 mm thickness with about",
+      "1.75/h cells, and the rim -- where the whole area error lives -- is",
+      "resolved only as well as that count. The dyadic ladder resolves the",
+      "thickness with 1, 1, 2, 3, 6 and 12 cells: it repeats 1, then skips 4,",
+      "5, and 7 through 11. Halving h therefore does not halve the rim error,",
+      "and between the first two rungs it does not reduce it at all.",
+      "Marching cubes reads 0.757 then 0.636 of exact area across those two,",
+      "so refinement moves the answer away from the truth. An analysis gate",
+      "excluded them from the fits, which left marching cubes with three error",
+      "points spanning one factor of four in h -- too thin to distinguish an",
+      "order from a transition."
+    ],
+    "fix": [
+      "Choose h = 1.75/n. Every rung then resolves the thickness with n cells,",
+      "strictly increasing, so no reversal is possible and the gate never",
+      "fires. Seven rungs give six error points per representation against the",
+      "dyadic ladder's three for marching cubes, over the same range of h.",
+      "Trimming the dyadic ladder instead would not have helped: dropping the",
+      "two one-cell rungs leaves exactly the four the gate already kept."
+    ]
+  },
+
+  "rungs": {
+    "rule": "h = 1.75/n mm",
+    "n": [2, 3, 4, 6, 8, 10, 12],
+    "h_mm": [0.875, 0.583333, 0.4375, 0.291667, 0.21875, 0.175, 0.145833],
+    "thickness_cells": [2, 3, 4, 6, 8, 10, 12],
+    "why_no_n5_n7_n9_n11": [
+      "Cost grows like h^-3 while the information gained per rung falls, so",
+      "the ladder thins out at the expensive end. n = 2, 3, 4 are nearly free",
+      "and are kept adjacent; beyond that every second value is enough to read",
+      "a local order.",
+      "n = 14 would be the next rung and is estimated at 83 GB, past what this",
+      "machine holds alongside anything else. The per-representation floor in",
+      "the driver is set to 0.1458 mm for that reason."
+    ],
+    "caveat": [
+      "The grid is positioned by the ground box, not by the disk, so the",
+      "thickness spans n or n+1 cells depending on where the disk sits in the",
+      "grid. h = 1.75/n makes the count monotone in n, which is what the fits",
+      "need; it does not pin it to exactly n."
+    ]
+  },
+
+  "unchanged_from_the_dyadic_ladder": [
+    "Scene, benchmark source, and the analytic terminal ratio.",
+    "Time step 1.25e-4 s and 400 post-kick frames at 2000 fps.",
+    "Reference rule: each representation against its own finest run.",
+    "The terminal-ratio gate at |omega| >= 0.1 rad/s.",
+    "The dt and eps0 sweeps, which this run does not touch."
+  ],
+
+  "cost": {
+    "wall_time_model_s": {
+      "plane_clip": "9.2 * h_mm^-2.19",
+      "marching_cubes": "8.4 * h_mm^-2.13",
+      "tet": "5.6 * h_mm^-0.94"
+    },
+    "fitted_from": [
+      "The dyadic grid sweep's own wall times. Only the two 0.15625 mm runs",
+      "were uncontended, so the exponents come from contended runs and are",
+      "used for scheduling rather than reported as cost."
+    ],
+    "memory_gb": "0.032 + 0.162 / h_mm^3, as measured for the dyadic ladder",
+    "predicted_gb": [0.27, 0.85, 1.97, 6.56, 15.51, 30.26, 52.27],
+    "schedule": [
+      "21 runs. All seven tetrahedral rungs together are under two minutes and",
+      "3.5 GB. The two coarsest voxel rungs per representation are under a",
+      "minute each. The n = 10 and n = 12 rungs hold 166 GB between them and",
+      "account for most of the wall clock.",
+      "Run with --memory_budget_gb 120 and --solo_gb 200 so nothing is forced",
+      "to run alone: about 18 minutes, against 51 serial. A 180 GB budget",
+      "reaches the floor of 11 minutes -- the single longest run -- but leaves",
+      "too little of the machine free to be worth it."
+    ]
+  },
+
+  "provenance": {
+    "binary": "//tools/voxel_sdf_experiments/disk_farkas:disk_farkas",
+    "driver": "tools/voxel_sdf_experiments/disk_farkas/run_ladder.py",
+    "output_dir": "out/disk_farkas_ladder",
+    "invocation": [
+      "python3 tools/voxel_sdf_experiments/disk_farkas/run_ladder.py",
+      "--sweeps grid",
+      "--rungs_mm 0.875,0.583333,0.4375,0.291667,0.21875,0.175,0.145833",
+      "--tet_extra_rungs_mm ''",
+      "--num_frames 400",
+      "--memory_budget_gb 120 --solo_gb 200 --jobs 10"
+    ],
+    "note": [
+      "The driver writes manifest.csv with only the cases of one invocation,",
+      "truncating rather than merging, so a partial sweep destroys the record",
+      "of every earlier one. Runs here merge it back by hand afterwards. That",
+      "is a defect in the driver, recorded so the next partial sweep does not",
+      "learn it the same way.",
+      "Results share the output directory with the dyadic ladder. The two are",
+      "distinguished by rung, not by directory, and both are in the manifest."
+    ]
+  }
+}

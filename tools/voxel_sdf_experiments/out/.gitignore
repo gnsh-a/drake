@@ -6,4 +6,4 @@
 # regenerable-and-therefore-disposable.
 !*/
 !.gitignore
-!**/ladder_config.json
+!**/ladder_config*.json

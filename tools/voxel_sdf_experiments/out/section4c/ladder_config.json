@@ -1,0 +1,154 @@
+{
+  "name": "section4c_spatula_slip",
+  "purpose": "Gripper-spatula manipulation task for the paper's section 4.3.",
+
+  "scene": {
+    "what": [
+      "Two ellipsoidal finger pads squeeze a cylindrical spatula handle while a",
+      "square wave modulates the grip. The spatula slides through the fingers",
+      "for the whole run in every representation: the baseline grip is",
+      "deliberately marginal, which is what makes this a slip test rather than",
+      "a hold test."
+    ],
+    "contact": "ellipsoid on cylinder, so the equal-pressure surface is curved",
+    "why_this_scene": [
+      "It is the only frictional, tangential, stick-slip contact in the study.",
+      "Section 4.1 found affine voxels fragmenting on curved contact and",
+      "section 4.2 found no fragmentation at all on the flat disk face, so",
+      "fragmentation was left as a property of curved surfaces with no evidence",
+      "that it costs anything. The paper's own open-questions list says a",
+      "fragmented patch is most likely to cause trouble in tangential contact",
+      "and that nothing tested it. This scene is that test."
+    ],
+    "baseline_gripper_force_n": 1.5,
+    "square_wave": {"amplitude_n": 5.0, "duty_cycle": 0.5, "period_s": 3.0},
+    "duration_s": 30.0,
+    "time_step_s": 0.04,
+    "sample_period_s": 0.04
+  },
+
+  "instrumentation_added_before_this_run": {
+    "why": [
+      "The earlier ten-run tier study measured trajectory error and cost only.",
+      "It could see that affine voxels behaved worst and could not say why, and",
+      "it recorded a 47.7 m position RMS for the coarse affine run as though",
+      "that were an accuracy."
+    ],
+    "fragmentation": [
+      "num_components and largest_component_area_fraction per finger, from the",
+      "CalcComponentStats already shared with the settling and disk studies.",
+      "Measured: affine voxels reach 67 components per finger with the largest",
+      "holding 2.7 percent of the area; tetrahedra and marching cubes give",
+      "exactly one component. This is what links affine's grip to the defect",
+      "section 4.1 found."
+    ],
+    "sap_effort": [
+      "Per-sample iteration and line-search counts. Both other studies found",
+      "the count pinned at one, so the solver axis had no range anywhere in the",
+      "paper. Here it does: 2.2 mean and 8 to 9 maximum iterations, with up to",
+      "38 line-search iterations. Whether it separates the representations is",
+      "the result rather than a precondition -- on the smoke run the three",
+      "agree to within 7 percent."
+    ],
+    "task_outcome": [
+      "held, first_contact_loss_time_s and handle_axis_slip_m. A dropped run's",
+      "position diverges as free fall, so an RMS against a reference measures",
+      "the length of the fall. The analysis now reports no trajectory error for",
+      "a dropped run and reports when it was dropped instead.",
+      "Slip is projected onto the initial handle direction and accumulated only",
+      "while held, so it stays about sliding through the fingers rather than",
+      "about the spatula's own rotation. Caveat: the spatula rotates by up to",
+      "0.86 rad in some runs, and projecting on the initial axis understates",
+      "sliding once it has. Swing is reported separately rather than folded in."
+    ]
+  },
+
+  "sweeps": {
+    "refinement": {
+      "what": "Resolution at the baseline grip. Trajectory accuracy and cost.",
+      "tiers": {"coarse": 1.0, "fine": 0.5, "finer": 0.25},
+      "reference": {"representation": "tet", "resolution_scale": 0.125},
+      "runs": 10,
+      "serial": true,
+      "why_serial": [
+        "These wall times are the paper's cost data for this section, and this",
+        "workload degrades under contention, so a shared machine would make",
+        "them unusable."
+      ],
+      "why_no_fourth_tier": [
+        "A three-way tier at 0.125 would sit on the reference itself. The",
+        "frozen-scene second-order forecast leaves only 1.2x margin over the",
+        "measured 10x reference-floor limit there, and at 0.0625 the forecast",
+        "is below the limit. The stub text in the paper says four tiers; that",
+        "is stale, not a missing run."
+      ],
+      "expected_wall_time_s": 2275
+    },
+    "grip": {
+      "what": "Grip force at each resolution. The threshold that holds the object.",
+      "forces_n": [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0],
+      "tiers": ["coarse", "fine", "finer"],
+      "runs": 63,
+      "jobs": 16,
+      "why": [
+        "Trajectory RMS compares representations on a task all of them passed.",
+        "The coarse affine run does not pass it: the gripper drops the spatula",
+        "at 23.3 s. A ratio of position errors cannot express that, and a",
+        "threshold force can -- how much more grip a representation needs to",
+        "hold what another holds is one number and a physical one.",
+        "A smoke sweep at 1.0 and 1.5 N found tetrahedra and marching cubes",
+        "holding at both and affine failing at both, so affine's threshold is",
+        "above the baseline and the range has to reach well past it. The upper",
+        "end is 6 N because the square wave adds 5 N on top of the baseline."
+      ],
+      "why_concurrent": [
+        "This sweep reports pass or fail, so contention cannot corrupt the",
+        "result. Wall times are still recorded and flagged timing_valid=false.",
+        "Each run holds about 50 MiB, so concurrency is bounded by cores rather",
+        "than memory -- the opposite of the disk study."
+      ],
+      "expected_wall_time_s": 1750,
+      "expected_wall_time_note": [
+        "Bounded by the seven marching-cubes runs at the finer tier, 1706 s",
+        "each, which all fit in the 16 slots at once. Serial the sweep would",
+        "be 4.4 hours."
+      ]
+    }
+  },
+
+  "analysis_gates": {
+    "dropped_run": {
+      "rule": "A run whose final sample has no spatula contact reports no trajectory error",
+      "why": [
+        "Free fall dominates every trajectory channel afterwards. The coarse",
+        "affine run read 47.7 m position RMS and 223 m maximum, which is the",
+        "distance fallen from t = 23.3 s, not an accuracy. Outcome fields stay",
+        "populated because 'dropped at 23.3 s' is the finding."
+      ]
+    },
+    "fragmentation_fraction": {
+      "rule": "Only samples with a patch contribute to the minimum area fraction",
+      "why": [
+        "A no-contact sample leaves the field at zero, and a minimum over those",
+        "would report total fragmentation for a gripper that simply let go."
+      ]
+    }
+  },
+
+  "provenance": {
+    "binary": "//tools/voxel_sdf_experiments/spatula_slip:spatula_slip",
+    "driver": "tools/voxel_sdf_experiments/spatula_slip/run_tiers.py",
+    "output_dir": "out/spatula_slip_tiers",
+    "outputs": [
+      "runs.csv and timing/*.json -- cost, serial only",
+      "trajectories/*.csv -- per-sample, now with components and SAP effort",
+      "trajectory_metrics.csv -- accuracy and outcome per tier case",
+      "tier_summary.csv -- per-tier rollup",
+      "grip_sweep.csv -- outcome per (tier, representation, force)"
+    ],
+    "supersedes": [
+      "The ten-run tier study of 2026-08-17, which predates the fragmentation",
+      "and SAP columns and recorded the dropped run's free fall as an error."
+    ]
+  }
+}
