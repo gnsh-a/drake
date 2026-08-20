@@ -104,17 +104,23 @@ ClippedPolygon ClipTriangleToNonnegativePressure(
     DRAKE_DEMAND(denominator != 0.0 && std::isfinite(denominator));
     const double t = a.contact_pressure / denominator;
     DRAKE_DEMAND(t > 0.0 && t < 1.0 && std::isfinite(t));
-    // The two triangles incident on this raw mesh edge traverse it in opposite
-    // directions. Interpolating in the same canonical direction both times
-    // makes the rim vertex bit-identical rather than merely close, so the
-    // shared-vertex cache is never asked to reconcile two positions.
-    const bool a_is_low = a.key < b.key;
-    const EdgeVertex& lo = a_is_low ? a : b;
-    const EdgeVertex& hi = a_is_low ? b : a;
-    const double s = a_is_low ? t : 1.0 - t;
-    Vector3d p_AV_A = (1.0 - s) * lo.p_AV_A + s * hi.p_AV_A;
-    if (rim_projector != nullptr) {
-      p_AV_A = rim_projector->project(p_AV_A);
+    Vector3d p_AV_A;
+    if (rim_projector == nullptr) {
+      p_AV_A = (1.0 - t) * a.p_AV_A + t * b.p_AV_A;
+    } else {
+      // The two triangles incident on this raw mesh edge traverse it in
+      // opposite directions, and neither 1 - (1 - t) nor a reversed convex
+      // combination is exact in floating point. Interpolating in the same
+      // canonical direction both times makes the seed, and therefore the
+      // projected vertex, bit-identical rather than merely close, so the
+      // shared-vertex cache is never asked to reconcile two positions. The
+      // plain kernel keeps its original expression instead of this one, so
+      // that adding a projector cannot perturb it.
+      const bool a_is_low = a.key < b.key;
+      const EdgeVertex& lo = a_is_low ? a : b;
+      const EdgeVertex& hi = a_is_low ? b : a;
+      const double s = a_is_low ? t : 1.0 - t;
+      p_AV_A = rim_projector->project((1.0 - s) * lo.p_AV_A + s * hi.p_AV_A);
     }
     DRAKE_DEMAND(p_AV_A.allFinite());
     result.vertices[result.size++] = ClippedVertex{
