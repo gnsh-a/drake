@@ -1,0 +1,116 @@
+{
+  "name": "section4_settling",
+  "purpose": "Free-body settling convergence for the paper's section 4.1.",
+
+  "scenes": ["sphere_sphere", "sphere_box"],
+  "representations": ["tet", "plane_clip", "marching_cubes"],
+
+  "load": {
+    "target_equilibrium_penetration_m": 0.026666666666666668,
+    "expression": "0.08 / 3",
+    "derived_per_scene": true,
+    "why": [
+      "The load is chosen to produce this penetration, and the mass that does",
+      "so is scene dependent, so both scenes rest at the same operating",
+      "penetration without transcribed force constants.",
+      "The value exists to keep the equal-pressure plane off a voxel cell",
+      "boundary at every rung. Cell phase is remainder(delta / 2h, 1); over a",
+      "dyadic ladder delta/h is 8/3 times a power of two, and a 1/3 offset is",
+      "invariant under halving h, so the plane stays 1/3 of a cell off a",
+      "boundary at every rung -- and 1/6 off for marching cubes, whose",
+      "degeneracy sits half a cell away at delta = (2i + 1) h.",
+      "No single penetration can put marching cubes on a boundary at every",
+      "dyadic rung: halving h turns an odd multiple into an even one.",
+      "Pass --target_equilibrium_penetration 0.02 to sit deliberately on an",
+      "affine cell boundary at every dyadic rung. That is a separate",
+      "robustness axis and is not part of this ladder."
+    ]
+  },
+
+  "rungs_mm": [10.0, 8.0, 5.0, 2.5],
+  "rung_choice": {
+    "why_8": [
+      "8 mm is the only resolution between 5 and 10 that preserves the cell",
+      "phase: delta / 2h = 5/3 there, so |phase| is 1/3 for affine and 1/6",
+      "for marching cubes, identical to every dyadic rung.",
+      "7.5 mm gives 0.222, and 20/3 mm gives exactly 0 -- the plane lands on",
+      "an affine cell boundary, which is the degeneracy the whole ladder is",
+      "built to avoid. 40/7 mm also preserves phase but clusters against the",
+      "5 mm rung.",
+      "The fourth rung exists so each series has three refinement intervals",
+      "rather than two, which is what makes an anomalous slope at the fine",
+      "end distinguishable from a trend."
+    ]
+  },
+
+  "reference": {
+    "representation": "tet",
+    "resolution_mm": 1.25,
+    "one_per_scene": true,
+    "why": [
+      "The closed form pins the resting penetration but says nothing about",
+      "the path taken to reach it, and the transient has no analytic answer.",
+      "A fine tetrahedral run stands in for one, as the spatula study does.",
+      "It is a reference for the trajectory only. Accuracy of the resting",
+      "penetration is measured against the closed form, not against this run.",
+      "Every run of one scene shares a duration, because the natural period",
+      "depends on the load and scene rather than on resolution, so with a",
+      "common time step and stride the samples line up exactly and no",
+      "resampling is involved. The analysis checks that rather than assuming",
+      "it."
+    ]
+  },
+
+  "integration": {
+    "time_step_s": 1.0e-4,
+    "duration_periods": 15.0,
+    "settling_window_periods": 1.25,
+    "trajectory_stride": 10,
+    "why_15_periods": [
+      "The body reaches its final penetration to within a micrometre by about",
+      "three periods, so 15 is far longer than convergence needs. It is kept",
+      "because marching cubes loses contact on the flat scene at about 9.3",
+      "periods; a shorter run would delete that finding rather than save time."
+    ],
+    "why_stride": [
+      "Asking for a trajectory forces the surface view and its connected",
+      "component pass to run at every written step rather than only inside",
+      "the settled window. Striding buys that cost back. Runs compared",
+      "against each other must share both the stride and the time step."
+    ]
+  },
+
+  "concurrency": {
+    "jobs": 26,
+    "safe": true,
+    "why": [
+      "Each settling run holds about 0.3 GB, so all 26 run at once on this",
+      "machine and wall time is the slowest single run rather than the sum.",
+      "This is the opposite of the disk study, which is memory bound."
+    ]
+  },
+
+  "runs": {
+    "count": 26,
+    "composition": "2 scenes x 3 representations x 4 rungs, plus 1 tet reference per scene"
+  },
+
+  "provenance": {
+    "binary": "//tools/voxel_sdf_experiments/settling:settling",
+    "driver": "tools/voxel_sdf_experiments/settling/run_ladder.py",
+    "csv_schema_version": 1,
+    "output_dir": "out/settling_matrix",
+    "note": [
+      "Results are not tracked; the out tree is ignored. Regenerate with the",
+      "driver and this configuration.",
+      "The row format gained trajectory_stride and five SAP columns after the",
+      "first 18-run matrix was produced, and that column was inserted rather",
+      "than appended, so any positional reader of a pre-existing CSV is",
+      "wrong. Readers go by column name."
+    ],
+    "supersedes": [
+      "out/settling_offboundary and out/ladder_pen2p2mm, both deleted: they",
+      "predate the 8 mm rung, the trajectories and the SAP columns."
+    ]
+  }
+}

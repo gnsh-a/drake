@@ -1,2 +1,9 @@
+# Results are regenerable and large, so nothing here is tracked by default.
 *
+
+# Except the record of what was run and why. A ladder configuration is the
+# only way to reproduce a result set, so it is the one file that must not be
+# regenerable-and-therefore-disposable.
+!*/
 !.gitignore
+!**/ladder_config.json

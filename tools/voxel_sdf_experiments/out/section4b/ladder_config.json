@@ -1,0 +1,201 @@
+{
+  "name": "section4b_disk_farkas",
+  "purpose": "Sliding and spinning disk convergence for the paper's section 4.2.",
+
+  "benchmark": {
+    "source": [
+      "Masterjohn, Guoy, Shepherd and Castro, Velocity Level Approximation of",
+      "Pressure Field Contact Patches, RA-L 2022 (arXiv:2110.04157), Sec. V-A."
+    ],
+    "scene": "tools/voxel_sdf_experiments/disk_farkas/disk_plane.yaml",
+    "disk": {
+      "radius_m": 0.01213,
+      "thickness_m": 0.00175,
+      "density_kg_m3": 7010.0,
+      "friction": 0.2,
+      "hydroelastic_modulus_pa": 1.0e7
+    },
+    "modulus_note": [
+      "The paper uses 1.0 GPa; this scene uses 10 MPa. The original study",
+      "checked the difference and found it irrelevant to the terminal ratio.",
+      "Stated here rather than left as a silent divergence."
+    ],
+    "protocol": [
+      "The disk starts at rest, settles under gravity and compliant contact,",
+      "then receives an instantaneous velocity kick. Its z, roll and pitch",
+      "are never pinned: the free mount makes the normal load settle to mg",
+      "for every representation, so patch area rather than load is what",
+      "exposes a missing rim."
+    ]
+  },
+
+  "reference_solutions": {
+    "terminal_ratio": {
+      "kind": "analytic",
+      "eps_star_theory": 0.653,
+      "eps_star_discrete": 0.64426,
+      "why": [
+        "Coulomb friction drives the slip-to-spin ratio eps = |v| / (wz R) to",
+        "a universal terminal value regardless of initial conditions, so",
+        "accuracy needs no reference run at all. This is a stronger benchmark",
+        "than settling, whose closed form covers only the endpoint."
+      ]
+    },
+    "trajectory_error": {
+      "kind": "self-referenced",
+      "metric": "||x - x_ref||_2 / ||x_ref||_2 over the position components",
+      "reference": "each representation's own finest run",
+      "why": [
+        "The paper's error definition, used unchanged. The reference is per",
+        "representation and never fine tetrahedra: the three converge to",
+        "different terminal ratios, 0.6319, 0.6704 and 0.6497, which sit",
+        "0.038 apart. A common tetrahedral reference would fold that constant",
+        "offset into every affine and marching-cubes error point, so the",
+        "series would flatten at the offset instead of showing an order.",
+        "Convergence order is therefore measured against a run's own family;",
+        "correctness is measured against the analytic value above."
+      ],
+      "consequence": [
+        "The finest rung of each series is its own reference and has no error",
+        "point, so each series stops one point short on the error plots. The",
+        "eps* plots need no reference and carry every rung."
+      ]
+    }
+  },
+
+  "sweeps": {
+    "grid": {
+      "what": "Grid size at a fixed time step. Spatial convergence.",
+      "rungs_mm": [5.0, 2.5, 1.25, 0.625, 0.3125, 0.15625],
+      "tet_only_extra_rungs_mm": [0.08, 0.04, 0.02, 0.012],
+      "time_step_s": 1.25e-4,
+      "why_finest_is_0p15625": [
+        "Marching cubes needs it: its patch rim is only first order, so its",
+        "area and terminal ratio are both still climbing at 0.3125 mm.",
+        "Tetrahedra and affine voxels have settled well before it and run",
+        "there only to keep every column measured against the same grid."
+      ],
+      "why_tet_extras": [
+        "Tetrahedral constraint count grows like 1/h and the voxel pair like",
+        "1/h^2, so equal h is nowhere near equal cost. These rungs widen the",
+        "constraint-count axis, not the resolution axis, and are cheap: tet",
+        "stays under 500 MB even at 0.012 mm. They are kept in tables and",
+        "fits and left off the resolution charts."
+      ]
+    },
+    "dt": {
+      "what": "Time step at a fixed grid. Temporal convergence.",
+      "time_steps_ms": [2.0, 1.0, 0.5, 0.25, 0.125, 0.0625],
+      "rung_mm": 2.5,
+      "settle_time_step_s": 6.25e-5,
+      "why_pinned_settle": [
+        "The settle phase runs at one fixed time step for every case, so all",
+        "post-kick trajectories start from an identical settled state and the",
+        "sweep measures integration error alone rather than a different",
+        "starting condition per case. A discrete plant fixes its time step at",
+        "construction, so the runner builds a second plant and copies every",
+        "discrete state group across; the transfer is asserted rather than",
+        "inferred, because a bad handoff still yields a plausible eps curve."
+      ]
+    },
+    "eps0": {
+      "what": "Initial slip-to-spin ratio. Invariance of the terminal ratio.",
+      "values": [0.5, 0.75, 1.0, 1.5, 2.0, 3.0],
+      "rung_mm": 1.25,
+      "spin_rad_s": 12.0,
+      "slide_rule": "|v| = eps0 * wz * R, holding the spin fixed",
+      "box_full_size_m": [0.4, 0.4, 0.02],
+      "why_range_is_narrower_than_the_paper": [
+        "The paper sweeps [0.1, 10]. A voxel SDF cannot voxelize an infinite",
+        "plane, so a long slide runs off a bounded ground box; widening the",
+        "box costs memory because the grid is sized by the box, not the disk.",
+        "At the low end the singular omega -> 0 stop does not converge under",
+        "fixed-step velocity-level integration, which the pre-SDF study found",
+        "independently."
+      ]
+    }
+  },
+
+  "trajectory": {
+    "frames_per_second": 2000.0,
+    "num_frames": 400,
+    "why": [
+      "Matches the integration window of the earlier study so the terminal",
+      "ratios are comparable to its numbers and to the paper's 0.653."
+    ]
+  },
+
+  "analysis_gates": {
+    "thickness_resolution": {
+      "rule": "Exclude rungs whose patch area moves away from exact",
+      "tolerance": 0.005,
+      "why": [
+        "The isotropic voxel grid spans the disk's 1.75 mm thickness with",
+        "ceil(1.75/h) cells, so 5 mm and 2.5 mm are both one cell and",
+        "stepping between them is not refinement where the rim needs it.",
+        "Marching cubes reads 0.757, 0.636 then 0.836 of exact area across",
+        "those three rungs. Fitting an order through a reversal is",
+        "meaningless, so those rungs are dropped from fits and kept in",
+        "tables. The tolerance exists because tetrahedral area asymptotes to",
+        "1.000018 rather than exactly 1; it is not a fitting knob."
+      ]
+    },
+    "terminal_ratio": {
+      "omega_cutoff_rad_s": 0.1,
+      "why": [
+        "eps divides by the spin rate, so it is ill-conditioned once the disk",
+        "has nearly stopped. The terminal value is read at the last sample",
+        "still spinning above this cutoff."
+      ]
+    }
+  },
+
+  "memory": {
+    "model_gb": "0.032 + 0.162 / h_mm^3, scaled by ground-box footprint",
+    "measured": {"1.25mm": 0.115, "0.625mm": 0.696},
+    "predicted": {"0.3125mm": 5.3, "0.15625mm": 42.0},
+    "tet_gb": 0.5,
+    "why": [
+      "Voxel grids are sized by the ground box rather than by the 12 mm disk,",
+      "so their footprint grows like h^-3. The fit reproduces the ~40 GB the",
+      "original study recorded at the finest rung, which is what validates",
+      "it. Concurrency is bounded by this rather than by cores: swapping is",
+      "what makes a machine unusable. The driver admits a case only when both",
+      "--jobs and --memory_budget_gb allow it, and runs anything at or above",
+      "--solo_gb alone."
+    ]
+  },
+
+  "runs": {
+    "count": 58,
+    "composition": "22 grid (including 4 tet-only), 18 dt, 18 eps0",
+    "completed": 56,
+    "deferred": [
+      "plane_clip and marching_cubes at 0.15625 mm, about 42 GB each, which",
+      "must run alone. Until they land, the grid-order fits for those two",
+      "representations are referenced against their own 0.3125 mm runs and",
+      "are provisional. Every terminal ratio, every time-step order and the",
+      "rim-deficit result are final."
+    ]
+  },
+
+  "provenance": {
+    "binary": "//tools/voxel_sdf_experiments/disk_farkas:disk_farkas",
+    "driver": "tools/voxel_sdf_experiments/disk_farkas/run_ladder.py",
+    "output_dir": "out/disk_farkas_ladder",
+    "note": [
+      "Results are not tracked; the out tree is ignored. The driver writes a",
+      "manifest.csv recording each case's parameters, because they are not",
+      "recoverable from the trajectory CSVs.",
+      "A case that overlapped another is marked timing_valid=false: this",
+      "workload degrades once the working set stops fitting in cache, so a",
+      "contended wall time is not a cost measurement."
+    ],
+    "reproduces": [
+      "All 15 terminal ratios across three representations and five shared",
+      "rungs match the earlier three-way study to four decimals, as do the",
+      "patch areas, the affine and marching-cubes constraint counts, and the",
+      "time-step orders 1.20, 1.20 and 1.16."
+    ]
+  }
+}
