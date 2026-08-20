@@ -74,7 +74,8 @@ def _fit_order(points):
     denominator = n * sum(x * x for x in xs) - sum_x * sum_x
     if denominator == 0.0:
         return float("nan"), float("nan")
-    slope = (n * sum(x * y for x, y in zip(xs, ys)) - sum_x * sum_y) / denominator
+    slope = ((n * sum(x * y for x, y in zip(xs, ys)) - sum_x * sum_y) /
+             denominator)
     intercept = (sum_y - slope * sum_x) / n
     mean_y = sum_y / n
     total = sum((y - mean_y) ** 2 for y in ys)
@@ -105,6 +106,8 @@ def _run_case(binary, representation, h_mm, ground, scratch):
                    if row["post_kick"] == "false"][-1]
     area = float(settled["contact_area_m2"])
     ratio = area / EXACT_AREA_M2
+    rim_deficit_cells = ((1.0 - math.sqrt(max(ratio, 0.0))) * DISK_RADIUS_M /
+                         (h_mm * 1e-3))
     return {
         "representation": representation,
         "h_mm": f"{h_mm:.17g}",
@@ -112,8 +115,7 @@ def _run_case(binary, representation, h_mm, ground, scratch):
         "area_over_exact": f"{ratio:.9f}",
         # The rim error as a fraction of a cell. A patch that is short by a
         # constant number of cells is the signature this study is looking for.
-        "rim_deficit_cells":
-            f"{(1.0 - math.sqrt(max(ratio, 0.0))) * DISK_RADIUS_M / (h_mm * 1e-3):.6f}",
+        "rim_deficit_cells": f"{rim_deficit_cells:.6f}",
         "surface_faces": settled["surface_faces"],
         "normal_force_z_N": settled["normal_force_z_N"],
         "seconds": f"{elapsed:.1f}",

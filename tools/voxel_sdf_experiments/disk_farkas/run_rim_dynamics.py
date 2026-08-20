@@ -13,8 +13,9 @@ this separately, so it exists as a file rather than as a claim.
 Unlike the static study this uses the benchmark's own settings throughout --
 the full 200 x 200 x 20 mm ground, 0.05 s of settling, and 400 post-kick frames
 -- because a terminal ratio is a property of the whole trajectory and nothing
-about it can be shortened the way a settled patch area can. One case at
-0.15625 mm takes eight to eleven minutes, which is why the ladder stops there.
+about it can be shortened the way a settled patch area can. One case at the
+finest rung takes eight to eleven minutes and the voxel grids reach 52 GB, which
+is what sets the bottom of the ladder at 1.75/12 mm.
 
 eps* follows the benchmark's own rule rather than the last row: the last
 post-kick sample whose spin still exceeds kSpinThreshold = 0.1 rad/s. Past that
@@ -25,7 +26,23 @@ The reference is the finest affine value rather than theory. The universal
 terminal ratio for this scene is about 0.653, but affine converges to 0.6704
 here and locks there, and an order measured against the method that has
 converged is the honest one. Reading it against 0.653 instead would fold
-affine's own residual into both marching-cubes series.
+affine's own residual into both marching-cubes series. What anchors that choice
+is not affine's self-consistency but the static ladder: affine reaches 1.000022
+of the closed-form pi R^2, so its limit is validated against something outside
+this study rather than against itself.
+
+The default rungs mix the dyadic ladder with the thickness-aligned one,
+h = 1.75/n, because a purely dyadic subsequence hides what this scene does.
+Marching cubes' eps* is not monotone off the dyadic points -- it rises to
+0.6025 at 0.583 mm and falls to 0.5721 at 0.4375 -- which is the rim deficit's
+grid-phase dependence showing up in the trajectory. A dyadic-only fit therefore
+looks cleaner than the method is. Fits exclude rungs coarser than
+--fit_max_h_mm, 2.5 mm by default, because eps* is non-monotone at the coarse
+end too: 5 mm reads 0.2941, above 2.5 mm's 0.1892, and is simply outside the
+asymptotic range.
+
+Cases already present in the output file are skipped, so a ladder this long can
+be extended or resumed without repeating what has run.
 
 Usage:
   bazel build -c opt //tools/voxel_sdf_experiments/disk_farkas:disk_farkas
@@ -48,7 +65,11 @@ EXACT_AREA_M2 = math.pi * DISK_RADIUS_M * DISK_RADIUS_M
 # reproduce the binary's own definition of a terminal ratio, not invent one.
 SPIN_THRESHOLD_RAD_S = 0.1
 
-DEFAULT_RUNGS_MM = (2.5, 1.25, 0.625, 0.3125, 0.15625)
+# The dyadic ladder and the thickness-aligned one, h = 1.75/n, interleaved.
+DEFAULT_RUNGS_MM = (5.0, 2.5, 1.25, 0.875, 0.625, 1.75 / 3.0, 0.4375, 0.3125,
+                    1.75 / 6.0, 0.21875, 0.175, 0.15625, 1.75 / 12.0)
+# Coarser than this is outside the asymptotic range; see the module docstring.
+DEFAULT_FIT_MAX_H_MM = 2.5
 DEFAULT_REPRESENTATIONS = ("plane_clip", "marching_cubes",
                            "marching_cubes_exact_rim")
 DEFAULT_REFERENCE = "plane_clip"
@@ -73,7 +94,8 @@ def _fit_order(points):
     denominator = n * sum(x * x for x in xs) - sum_x * sum_x
     if denominator == 0.0:
         return float("nan"), float("nan")
-    slope = (n * sum(x * y for x, y in zip(xs, ys)) - sum_x * sum_y) / denominator
+    slope = ((n * sum(x * y for x, y in zip(xs, ys)) - sum_x * sum_y) /
+             denominator)
     intercept = (sum_y - slope * sum_x) / n
     mean_y = sum_y / n
     total = sum((y - mean_y) ** 2 for y in ys)
@@ -145,6 +167,9 @@ def main():
     parser.add_argument("--reference", default=DEFAULT_REFERENCE,
                         help="Representation whose finest rung is the "
                              "converged value the orders are measured against.")
+    parser.add_argument("--fit_max_h_mm", type=float,
+                        default=DEFAULT_FIT_MAX_H_MM,
+                        help="Exclude coarser rungs from the order fits.")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -156,8 +181,16 @@ def main():
     scratch.mkdir(exist_ok=True)
 
     rows = []
+    if output.exists():
+        with open(output, newline="") as f:
+            rows = list(csv.DictReader(f))
+        print(f"resuming; {len(rows)} cases already in {output}")
+    finished = {(r["representation"], float(r["h_mm"])) for r in rows}
+
     for h_mm in sorted(rungs, reverse=True):
         for representation in representations:
+            if (representation, h_mm) in finished:
+                continue
             row = _run_case(args.binary, representation, h_mm, scratch)
             rows.append(row)
             print(f"{representation:<26} h={h_mm:<10.6g} "
@@ -169,7 +202,7 @@ def main():
                 writer.writeheader()
                 writer.writerows(rows)
 
-    finest = min(rungs)
+    finest = min(float(r["h_mm"]) for r in rows)
     reference_rows = [r for r in rows
                       if r["representation"] == args.reference
                       and float(r["h_mm"]) == finest]
@@ -179,19 +212,25 @@ def main():
     reference = float(reference_rows[0]["terminal_eps"])
     print(f"\nreference: {args.reference} at {finest} mm, eps* = "
           f"{reference:.6f}\n")
-    print("terminal-ratio error against that reference:")
+    print(f"terminal-ratio error against it, rungs <= {args.fit_max_h_mm} mm:")
     for representation in representations:
         if representation == args.reference:
             continue
         points = [(float(r["h_mm"]),
                    abs(float(r["terminal_eps"]) - reference))
-                  for r in rows if r["representation"] == representation]
+                  for r in rows if r["representation"] == representation
+                  and float(r["h_mm"]) <= args.fit_max_h_mm]
         points = [p for p in points if p[1] > 0.0 and math.isfinite(p[1])]
         order, r_squared = _fit_order(points)
-        series = "  ".join(f"{e:.4f}" for _, e in
-                           sorted(points, key=lambda p: -p[0]))
-        print(f"  {representation:<26} order {order:5.3f}  R^2 {r_squared:6.3f}"
-              f"   {series}")
+        ordered = sorted(points, key=lambda p: -p[0])
+        # A series that is not monotone in h is scattering with grid phase
+        # rather than converging cleanly, and a fit through it is worth less
+        # than its R^2 suggests. Say so where the fit is printed.
+        reversals = sum(1 for a, b in zip(ordered, ordered[1:]) if b[1] > a[1])
+        series = "  ".join(f"{e:.4f}" for _, e in ordered)
+        print(f"  {representation:<26} n {len(points):2d}  order {order:5.3f}  "
+              f"R^2 {r_squared:6.3f}  {reversals} reversal(s)")
+        print(f"    {series}")
     print(f"\nwrote {output}")
     return 0
 
