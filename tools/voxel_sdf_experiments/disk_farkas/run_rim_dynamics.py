@@ -283,7 +283,12 @@ def main():
             continue
         decay = max(e for _, e in points) / min(e for _, e in points)
         slope, r_squared = _fit_order(points)
-        head = f"  {representation:<26} vs {label:<22} decay {decay:7.1f}x"
+        # The gate verdict is rung-set dependent -- plain marching cubes
+        # decays 12.1x over the five dyadic rungs and 7.2x over all thirteen,
+        # landing on opposite sides of a tenfold gate -- so n and the decay
+        # travel with every verdict and neither can be quoted without them.
+        head = (f"  {representation:<26} vs {label:<22} n {len(points):2d}  "
+                f"decay {decay:7.1f}x")
         if not quotable:
             print(f"{head}   distance slope {slope:5.3f} (NOT an order)")
         elif decay >= DECAY_GATE:
