@@ -60,8 +60,6 @@ class MarchingCubesContactBuilder final {
  public:
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MarchingCubesContactBuilder);
 
-  /* `exact_rim` is nullopt for the plain kernel, which places the rim by
-   interpolating contact pressure along a raw marching-cubes edge. */
   /* `rim_projector` is nullopt for the plain kernel, which leaves the rim
    where interpolating contact pressure along a raw mesh edge put it. */
   explicit MarchingCubesContactBuilder(
