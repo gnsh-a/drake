@@ -14,7 +14,8 @@
 DEFINE_string(scene, "tools/voxel_sdf_experiments/disk_farkas/disk_plane.yaml",
               "Disk scene YAML path.");
 DEFINE_string(representation, "plane_clip",
-              "Representation: tet, plane_clip, or marching_cubes.");
+              "Representation: tet, plane_clip, marching_cubes, or "
+              "marching_cubes_exact_rim.");
 DEFINE_double(resolution, 0.0,
               "Tet resolution hint or voxel width in meters; 0 uses YAML.");
 DEFINE_double(time_step, 1.25e-4, "Measurement-plant time step in seconds.");

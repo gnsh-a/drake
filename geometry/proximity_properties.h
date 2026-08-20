@@ -119,6 +119,9 @@ enum class VoxelSdfExtractionMethod {
   kPlaneClip,
   /** Extracts the zero set of the pressure difference with marching cubes. */
   kMarchingCubes,
+  /** As kMarchingCubes, but places the patch rim by solving for the true zero
+   of contact pressure instead of interpolating it along a mesh edge. */
+  kMarchingCubesExactRim,
 };
 
 /**

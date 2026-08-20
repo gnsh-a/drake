@@ -68,6 +68,7 @@ void ValidateExtractionMethod(VoxelSdfExtractionMethod method,
   switch (method) {
     case VoxelSdfExtractionMethod::kPlaneClip:
     case VoxelSdfExtractionMethod::kMarchingCubes:
+    case VoxelSdfExtractionMethod::kMarchingCubesExactRim:
       return;
   }
   throw std::logic_error(
@@ -181,7 +182,9 @@ VoxelSdfGeometry::VoxelSdfGeometry(VoxelSdfShape shape, double voxel_width,
   ValidateEvaluationMode(evaluation_mode_, shape_name);
   ValidateExtractionMethod(extraction_method_, shape_name);
   if (evaluation_mode_ == VoxelSdfEvaluationMode::kStoredGridTrilinear &&
-      extraction_method_ == VoxelSdfExtractionMethod::kMarchingCubes) {
+      (extraction_method_ == VoxelSdfExtractionMethod::kMarchingCubes ||
+       extraction_method_ ==
+           VoxelSdfExtractionMethod::kMarchingCubesExactRim)) {
     throw std::logic_error(fmt::format(
         "The {} voxel SDF cannot combine stored-grid trilinear evaluation "
         "with marching-cubes extraction",

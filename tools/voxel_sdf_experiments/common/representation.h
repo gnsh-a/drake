@@ -9,9 +9,20 @@ namespace drake {
 namespace tools {
 namespace voxel_sdf_experiments {
 
-enum class Representation { kTet, kPlaneClip, kMarchingCubes };
+enum class Representation {
+  kTet,
+  kPlaneClip,
+  kMarchingCubes,
+  // Marching cubes with the patch rim solved for instead of interpolated.
+  kMarchingCubesExactRim,
+};
 
 Representation ParseRepresentation(std::string_view value);
+
+/* True for either marching-cubes kernel. The two differ only in where they
+ place the patch rim, so everything downstream -- the triangle surface type,
+ the dual-grid offset -- is shared. */
+bool IsMarchingCubes(Representation representation);
 std::string_view to_string(Representation representation);
 
 geometry::ProximityProperties MakeProperties(Representation representation,

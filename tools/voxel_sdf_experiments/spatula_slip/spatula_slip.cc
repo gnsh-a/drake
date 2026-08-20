@@ -316,8 +316,7 @@ BuiltScene BuildScene(const SpatulaSlipConfig& config) {
   result.geometry_ids = geometry_ids;
   result.X_BH = X_BH;
   result.resolutions = resolutions;
-  result.expect_triangles =
-      config.representation == Representation::kMarchingCubes;
+  result.expect_triangles = IsMarchingCubes(config.representation);
   result.diagram = builder.Build();
   return result;
 }

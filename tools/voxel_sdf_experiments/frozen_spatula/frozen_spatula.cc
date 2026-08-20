@@ -376,7 +376,7 @@ ComputedSurface ComputeSurface(const LoadedSpatulaGeometry& geometry,
   }
   ComputedSurface result{.cylinder_id = cylinder_id};
   if (surfaces.empty()) return result;
-  const bool expect_triangle = representation == Representation::kMarchingCubes;
+  const bool expect_triangle = IsMarchingCubes(representation);
   if (surfaces[0].is_triangle() != expect_triangle) {
     throw std::runtime_error(
         "Contact surface type did not match the representation");

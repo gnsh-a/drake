@@ -193,8 +193,7 @@ BuiltScene BuildScene(const DiskFarkasConfig& config, double time_step,
   result.diagram = builder.Build();
   result.plant = &plant;
   result.disk_body = &disk_body;
-  result.expect_triangle_surface =
-      config.representation == Representation::kMarchingCubes;
+  result.expect_triangle_surface = IsMarchingCubes(config.representation);
   return result;
 }
 

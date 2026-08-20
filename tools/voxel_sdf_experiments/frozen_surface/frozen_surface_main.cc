@@ -11,7 +11,8 @@
 
 DEFINE_string(scene, "sphere_sphere", "Scene: sphere_sphere or sphere_box.");
 DEFINE_string(representation, "plane_clip",
-              "Representation: tet, plane_clip, or marching_cubes.");
+              "Representation: tet, plane_clip, marching_cubes, or "
+              "marching_cubes_exact_rim.");
 DEFINE_double(penetration, 0.0199, "Commanded penetration in meters.");
 DEFINE_double(voxel_width, 0.01, "Voxel-SDF cell width in meters.");
 DEFINE_double(tet_resolution_hint, 0.01,

@@ -8,7 +8,8 @@
 #include "drake/tools/voxel_sdf_experiments/spatula_slip/spatula_slip.h"
 
 DEFINE_string(representation, "plane_clip",
-              "Representation: tet, plane_clip, or marching_cubes.");
+              "Representation: tet, plane_clip, marching_cubes, or "
+              "marching_cubes_exact_rim.");
 DEFINE_double(resolution_scale, 1.0,
               "Scale on every parsed compliant resolution hint.");
 DEFINE_double(time_step, 0.04, "Discrete MultibodyPlant time step in seconds.");

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "drake/common/drake_copyable.h"
@@ -27,6 +29,18 @@ struct MarchingCubesNode {
   double pressure_B{};
 };
 
+/* Moves a clipped rim vertex onto the contact patch's true boundary.
+
+ That boundary is the curve where both undeformed surfaces pass through the
+ same point, so both pressures vanish there. Marching cubes has no vertex on
+ it: its vertices lie where the equal-pressure surface crosses a grid edge, and
+ the boundary is where that surface leaves both bodies. The projector is given
+ the interpolated rim vertex and returns a point on the boundary curve, or the
+ input unchanged when no nearby well-conditioned boundary exists. */
+struct RimProjector {
+  std::function<Vector3<double>(const Vector3<double>&)> project;
+};
+
 /* Query-local mesh data ready for the Phase 4 constituent-gradient and
  ContactSurface finalization steps. Centroids correspond one-to-one and in
  order with the faces in builder_A. */
@@ -46,7 +60,13 @@ class MarchingCubesContactBuilder final {
  public:
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MarchingCubesContactBuilder);
 
-  explicit MarchingCubesContactBuilder(double voxel_width);
+  /* `exact_rim` is nullopt for the plain kernel, which places the rim by
+   interpolating contact pressure along a raw marching-cubes edge. */
+  /* `rim_projector` is nullopt for the plain kernel, which leaves the rim
+   where interpolating contact pressure along a raw mesh edge put it. */
+  explicit MarchingCubesContactBuilder(
+      double voxel_width,
+      std::optional<RimProjector> rim_projector = std::nullopt);
 
   /* Adds retained triangles for one dual-grid cube. `nodes_A` follows
    kMcCornerOffsets order. A case bit is set exactly when
@@ -60,6 +80,7 @@ class MarchingCubesContactBuilder final {
 
  private:
   double voxel_width_{};
+  std::optional<RimProjector> rim_projector_;
   bool consumed_{false};
   MarchingCubesMeshData mesh_data_;
   // {axis, lowest i, lowest j, lowest k} -> builder vertex index.
@@ -85,6 +106,31 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B);
+
+/* As above, but moves each rim vertex onto the contact patch's true boundary.
+ Every other step, including the iso-surface, is identical.
+
+ Marching cubes resolves the patch boundary only to the grid. Its vertices sit
+ where the equal-pressure surface crosses a grid edge, and where a body's
+ surface has an edge -- a cylinder resting on its flat face, for example -- that
+ surface turns out of the contact plane within one cell. The last vertex on the
+ flat part therefore sits at the last grid column inside the patch, the triangle
+ leaving it is a chord across the corner, and interpolating pressure along that
+ chord puts the rim vertex back essentially on top of that same last vertex.
+ The rim is thus pinned to the grid, short of the true boundary by a fraction of
+ a cell that does not shrink as the grid refines, and the patch area loses an
+ order. Projecting the rim vertex onto the curve where both pressures vanish
+ removes that term without moving the surface anywhere else.
+
+ @pre Both geometries use primitive SDF evaluation and exact-rim
+      marching-cubes extraction. */
+std::unique_ptr<ContactSurface<double>>
+CalcVoxelSdfMarchingCubesExactRimContact(const VoxelSdfGeometry& A,
+                                         const math::RigidTransformd& X_WA,
+                                         GeometryId id_A,
+                                         const VoxelSdfGeometry& B,
+                                         const math::RigidTransformd& X_WB,
+                                         GeometryId id_B);
 
 }  // namespace hydroelastic
 }  // namespace internal

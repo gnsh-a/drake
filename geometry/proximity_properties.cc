@@ -166,6 +166,7 @@ void ValidateVoxelSdfExtractionMethod(VoxelSdfExtractionMethod method) {
   switch (method) {
     case VoxelSdfExtractionMethod::kPlaneClip:
     case VoxelSdfExtractionMethod::kMarchingCubes:
+    case VoxelSdfExtractionMethod::kMarchingCubesExactRim:
       return;
   }
   throw std::logic_error("The voxel SDF extraction method is invalid");
@@ -206,7 +207,9 @@ void AddVoxelSdfProperties(
   const VoxelSdfExtractionMethod effective_extraction =
       extraction_method.value_or(VoxelSdfExtractionMethod::kPlaneClip);
   if (effective_evaluation == VoxelSdfEvaluationMode::kStoredGridTrilinear &&
-      effective_extraction == VoxelSdfExtractionMethod::kMarchingCubes) {
+      (effective_extraction == VoxelSdfExtractionMethod::kMarchingCubes ||
+       effective_extraction ==
+           VoxelSdfExtractionMethod::kMarchingCubesExactRim)) {
     throw std::logic_error(
         "Marching-cubes voxel SDF extraction requires primitive SDF "
         "evaluation");

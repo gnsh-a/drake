@@ -459,6 +459,96 @@ GTEST_TEST(VoxelSdfMarchingCubesContactTest,
               0.02 * exact_area);
 }
 
+/* A cylinder resting on its flat face is the case the exact-rim kernel exists
+ for. The patch boundary is the circle where the cylinder's rim edge meets the
+ box's top face, and the equal-pressure surface turns out of the contact plane
+ there within a small fraction of one cell -- the penetration is about a
+ thousandth of the coarser voxel here. Marching cubes has no vertex on that
+ circle, so its rim is pinned to the last grid column inside the patch and the
+ missing annulus stays roughly one cell wide however fine the grid gets. This
+ is the regime the disk benchmark runs in; a test at a penetration comparable
+ to the cell size would instead find plain marching cubes at its best. */
+struct FlatDiskAreas {
+  double plain{};
+  double exact_rim{};
+};
+
+FlatDiskAreas CalcFlatDiskAreas(double voxel_width) {
+  // Masterjohn et al.'s quarter-coin puck on a ground box, at the penetration
+  // where the compliant normal load carries the puck's weight.
+  constexpr double kRadius = 0.01213;
+  constexpr double kThickness = 0.00175;
+  constexpr double kBoxHalfHeight = 0.01;
+  constexpr double kPenetration = 1.32e-7;
+  constexpr double kModulus = 1.0e7;
+
+  FlatDiskAreas result;
+  for (const VoxelSdfExtractionMethod method :
+       {VoxelSdfExtractionMethod::kMarchingCubes,
+        VoxelSdfExtractionMethod::kMarchingCubesExactRim}) {
+    const VoxelSdfGeometry disk(Cylinder(kRadius, kThickness), voxel_width,
+                                kModulus,
+                                VoxelSdfEvaluationMode::kPrimitiveSdf, method);
+    const VoxelSdfGeometry ground(Box(0.04, 0.04, 2.0 * kBoxHalfHeight),
+                                  voxel_width, kModulus,
+                                  VoxelSdfEvaluationMode::kPrimitiveSdf,
+                                  method);
+    const math::RigidTransformd X_WD(Vector3d(
+        0.0, 0.0, kBoxHalfHeight + 0.5 * kThickness - kPenetration));
+    const std::unique_ptr<ContactSurface<double>> surface =
+        method == VoxelSdfExtractionMethod::kMarchingCubes
+            ? CalcVoxelSdfMarchingCubesContact(
+                  disk, X_WD, GeometryId::get_new_id(), ground,
+                  math::RigidTransformd(), GeometryId::get_new_id())
+            : CalcVoxelSdfMarchingCubesExactRimContact(
+                  disk, X_WD, GeometryId::get_new_id(), ground,
+                  math::RigidTransformd(), GeometryId::get_new_id());
+    if (surface == nullptr) {
+      ADD_FAILURE() << "Expected a disk-on-box surface at h = " << voxel_width;
+      return {};
+    }
+    ExpectValidMarchingCubesSurface(*surface);
+    double& area = method == VoxelSdfExtractionMethod::kMarchingCubes
+                       ? result.plain
+                       : result.exact_rim;
+    area = surface->tri_mesh_W().total_area();
+  }
+  return result;
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest, FlatDiskRimIsPinnedToTheGrid) {
+  constexpr double kRadius = 0.01213;
+  constexpr double kCoarse = 1.25e-3;
+  constexpr double kFine = 0.3125e-3;
+  const double exact_area = std::numbers::pi * kRadius * kRadius;
+
+  const FlatDiskAreas coarse = CalcFlatDiskAreas(kCoarse);
+  const FlatDiskAreas fine = CalcFlatDiskAreas(kFine);
+
+  // Refining by four leaves the plain rim deficit inside the same cell-wide
+  // band, so the area error falls by far less than the sixteen a second-order
+  // patch would give.
+  for (const auto& [h, area] : {std::pair{kCoarse, coarse.plain},
+                                std::pair{kFine, fine.plain}}) {
+    const double rim_deficit_in_cells =
+        (1.0 - std::sqrt(area / exact_area)) * kRadius / h;
+    EXPECT_GT(rim_deficit_in_cells, 0.2);
+    EXPECT_LT(rim_deficit_in_cells, 1.5);
+  }
+
+  // The projected rim converges: at second order the error falls by sixteen
+  // over these two rungs. It may do better, but not much worse.
+  const double coarse_error = std::abs(coarse.exact_rim / exact_area - 1.0);
+  const double fine_error = std::abs(fine.exact_rim / exact_area - 1.0);
+  EXPECT_LT(coarse_error, 0.01);
+  EXPECT_GT(coarse_error / fine_error, 10.0);
+
+  // At both rungs the projected rim beats the pinned one by more than an order
+  // of magnitude.
+  EXPECT_LT(coarse_error, 0.1 * std::abs(coarse.plain / exact_area - 1.0));
+  EXPECT_LT(fine_error, 0.1 * std::abs(fine.plain / exact_area - 1.0));
+}
+
 }  // namespace
 }  // namespace hydroelastic
 }  // namespace internal

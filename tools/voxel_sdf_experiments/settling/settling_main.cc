@@ -11,7 +11,8 @@
 
 DEFINE_string(scene, "sphere_sphere", "Scene: sphere_sphere or sphere_box.");
 DEFINE_string(representation, "plane_clip",
-              "Representation: tet, plane_clip, or marching_cubes.");
+              "Representation: tet, plane_clip, marching_cubes, or "
+              "marching_cubes_exact_rim.");
 DEFINE_double(mass, 0.0,
               "Free-sphere mass in kilograms. When omitted, the load is "
               "derived from --target_equilibrium_penetration.");

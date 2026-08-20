@@ -406,7 +406,7 @@ SettlingDerived CalcSettlingDerived(const SettlingConfig& config) {
     result.contact_plane_voxel_phase = std::numeric_limits<double>::quiet_NaN();
   } else {
     double boundary_coordinate = penetration / (2.0 * config.voxel_width);
-    if (config.representation == Representation::kMarchingCubes) {
+    if (IsMarchingCubes(config.representation)) {
       boundary_coordinate -= 0.5;
     }
     result.contact_plane_voxel_phase = std::remainder(boundary_coordinate, 1.0);
@@ -532,8 +532,7 @@ SettlingResult RunSettling(const SettlingConfig& config) {
       const auto& contact = contacts.hydroelastic_contact_info(0);
       sample.support_force = std::abs(contact.F_Ac_W().translational().z());
       const ContactSurface<double>& surface = contact.contact_surface();
-      const bool expect_triangle =
-          config.representation == Representation::kMarchingCubes;
+      const bool expect_triangle = IsMarchingCubes(config.representation);
       if (surface.is_triangle() != expect_triangle) {
         throw std::runtime_error(
             "Contact surface type did not match the representation");

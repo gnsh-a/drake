@@ -146,6 +146,13 @@ ContactCalculator<T>::MaybeMakeContactSurface(GeometryId id_A,
             }
             calc_contact = &CalcVoxelSdfMarchingCubesContact;
             break;
+          case VoxelSdfExtractionMethod::kMarchingCubesExactRim:
+            if (representation_ !=
+                HydroelasticContactRepresentation::kTriangle) {
+              return {ContactSurfaceResult::kUnsupported, nullptr};
+            }
+            calc_contact = &CalcVoxelSdfMarchingCubesExactRimContact;
+            break;
         }
         DRAKE_DEMAND(calc_contact != nullptr);
         // Traverse the finer grid. Equal widths retain the lower-id traversal

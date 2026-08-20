@@ -141,8 +141,7 @@ ContactSurface<double> ComputeSurface(const FrozenSurfaceConfig& config) {
     throw std::runtime_error("Expected exactly one contact surface; got " +
                              std::to_string(surfaces.size()));
   }
-  const bool expect_triangle =
-      config.representation == Representation::kMarchingCubes;
+  const bool expect_triangle = IsMarchingCubes(config.representation);
   if (surfaces[0].is_triangle() != expect_triangle) {
     throw std::runtime_error("Contact surface type did not match extraction");
   }

@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 #include "drake/common/drake_assert.h"
 #include "drake/geometry/proximity/marching_cubes_table.h"
@@ -75,20 +76,26 @@ BoundaryVertexKey MakeBoundaryVertexKey(const EdgeKey& a, const EdgeKey& b) {
   return a < b ? BoundaryVertexKey{a, b} : BoundaryVertexKey{b, a};
 }
 
-/* Clips a raw marching-cubes triangle against linearly interpolated contact
- pressure >= 0. The input winding is preserved, and the result has at most four
- vertices. Strict sign changes create exact-zero rim vertices; existing
- exact-zero vertices are retained. */
+/* Clips a raw marching-cubes triangle against contact pressure >= 0. The input
+ winding is preserved, and the result has at most four vertices. Strict sign
+ changes create exact-zero rim vertices; existing exact-zero vertices are
+ retained.
+
+ The crossing is where the linear interpolant of the two end pressures
+ vanishes. With `rim_projector`, that crossing is then moved onto the patch's
+ true boundary. */
 ClippedPolygon ClipTriangleToNonnegativePressure(
-    const std::array<const EdgeVertex*, 3>& triangle) {
+    const std::array<const EdgeVertex*, 3>& triangle,
+    const RimProjector* rim_projector) {
   ClippedPolygon result;
   const auto add_raw_vertex = [&result](const EdgeVertex& vertex) {
     DRAKE_DEMAND(result.size < static_cast<int>(result.vertices.size()));
     result.vertices[result.size++] = ClippedVertex{
         vertex.p_AV_A, vertex.contact_pressure, vertex.key, std::nullopt};
   };
-  const auto add_boundary_vertex = [&result](const EdgeVertex& a,
-                                             const EdgeVertex& b) {
+  const auto add_boundary_vertex = [&result, rim_projector](
+                                       const EdgeVertex& a,
+                                       const EdgeVertex& b) {
     DRAKE_DEMAND(result.size < static_cast<int>(result.vertices.size()));
     DRAKE_DEMAND((a.contact_pressure < 0.0) != (b.contact_pressure < 0.0));
     DRAKE_DEMAND(a.contact_pressure != 0.0);
@@ -97,11 +104,21 @@ ClippedPolygon ClipTriangleToNonnegativePressure(
     DRAKE_DEMAND(denominator != 0.0 && std::isfinite(denominator));
     const double t = a.contact_pressure / denominator;
     DRAKE_DEMAND(t > 0.0 && t < 1.0 && std::isfinite(t));
-    result.vertices[result.size++] =
-        ClippedVertex{(1.0 - t) * a.p_AV_A + t * b.p_AV_A,
-                      0.0,
-                      {},
-                      MakeBoundaryVertexKey(a.key, b.key)};
+    // The two triangles incident on this raw mesh edge traverse it in opposite
+    // directions. Interpolating in the same canonical direction both times
+    // makes the rim vertex bit-identical rather than merely close, so the
+    // shared-vertex cache is never asked to reconcile two positions.
+    const bool a_is_low = a.key < b.key;
+    const EdgeVertex& lo = a_is_low ? a : b;
+    const EdgeVertex& hi = a_is_low ? b : a;
+    const double s = a_is_low ? t : 1.0 - t;
+    Vector3d p_AV_A = (1.0 - s) * lo.p_AV_A + s * hi.p_AV_A;
+    if (rim_projector != nullptr) {
+      p_AV_A = rim_projector->project(p_AV_A);
+    }
+    DRAKE_DEMAND(p_AV_A.allFinite());
+    result.vertices[result.size++] = ClippedVertex{
+        p_AV_A, 0.0, {}, MakeBoundaryVertexKey(a.key, b.key)};
   };
 
   for (int i = 0; i < 3; ++i) {
@@ -138,9 +155,13 @@ Vector3d CalcTrilinearGradient(const std::array<double, 8>& values,
 
 }  // namespace
 
-MarchingCubesContactBuilder::MarchingCubesContactBuilder(double voxel_width)
-    : voxel_width_(voxel_width) {
+MarchingCubesContactBuilder::MarchingCubesContactBuilder(
+    double voxel_width, std::optional<RimProjector> rim_projector)
+    : voxel_width_(voxel_width), rim_projector_(std::move(rim_projector)) {
   DRAKE_DEMAND(voxel_width_ > 0.0 && std::isfinite(voxel_width_));
+  if (rim_projector_.has_value()) {
+    DRAKE_DEMAND(rim_projector_->project != nullptr);
+  }
 }
 
 void MarchingCubesContactBuilder::AddCube(
@@ -252,7 +273,10 @@ void MarchingCubesContactBuilder::AddCube(
 
     // On the raw p_A - p_B = 0 triangle, clipping their mean pressure once
     // clips both constituent fields without creating two roundoff-offset rims.
-    const ClippedPolygon polygon = ClipTriangleToNonnegativePressure(vertices);
+    // Where that clip lands is a separate question, which the rim projector
+    // answers when one is supplied.
+    const ClippedPolygon polygon = ClipTriangleToNonnegativePressure(
+        vertices, rim_projector_.has_value() ? &*rim_projector_ : nullptr);
     // A clipped triangle is either unchanged, a smaller triangle, or a quad.
     // The preserved winding makes this fan consistent with the raw triangle.
     for (int i = 1; i + 1 < polygon.size; ++i) {
@@ -328,23 +352,72 @@ MarchingCubesMeshData MarchingCubesContactBuilder::TakeMeshData() && {
   return std::move(mesh_data_);
 }
 
-std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
+namespace {
+
+std::unique_ptr<ContactSurface<double>> DoCalcVoxelSdfMarchingCubesContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
-    const math::RigidTransformd& X_WB, GeometryId id_B) {
+    const math::RigidTransformd& X_WB, GeometryId id_B, bool exact_rim) {
   DRAKE_DEMAND(A.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf);
   DRAKE_DEMAND(B.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf);
-  DRAKE_DEMAND(A.extraction_method() ==
-               VoxelSdfExtractionMethod::kMarchingCubes);
-  DRAKE_DEMAND(B.extraction_method() ==
-               VoxelSdfExtractionMethod::kMarchingCubes);
+  DRAKE_DEMAND(A.extraction_method() == B.extraction_method());
 
   // Traverse and build in A. Every query of B is expressed in B, and its
   // pressure gradient is re-expressed in A. Registered geometry stores no
   // posed data, while the edge cache remains local to this invocation.
   const math::RigidTransformd X_AB = X_WA.InvertAndCompose(X_WB);
   const math::RigidTransformd X_BA = X_AB.inverse();
-  MarchingCubesContactBuilder builder(A.voxel_width());
+  std::optional<RimProjector> rim;
+  if (exact_rim) {
+    // A rim vertex may not travel more than this. The interpolated rim sits
+    // within a cell of the true boundary by construction, so a longer step
+    // means the branch pair that produced it does not describe this patch.
+    const double maximum_step = 2.0 * A.voxel_width();
+    rim = RimProjector{[&A, &B, &X_AB, &X_BA,
+                        maximum_step](const Vector3d& p_AV_A) {
+      // Both bodies' surfaces pass through the patch boundary, so it solves
+      // phi_A = 0 and phi_B = 0 at once. Each shape reports its signed
+      // distance as affine pieces; a piece of A and a piece of B give two
+      // planes whose line of intersection is a straight local model of that
+      // boundary. The minimum-norm step onto that line is the projection.
+      // Piecewise-affine shapes make the model exact, and the smallest step
+      // over all pairs picks the branches that actually meet here without
+      // needing to interpret any active region.
+      Vector3d best_A = p_AV_A;
+      double best_squared_distance = maximum_step * maximum_step;
+      const std::vector<VoxelSdfGeometry::SdfBranch> branches_A =
+          A.EvaluateSdfBranches(p_AV_A);
+      const std::vector<VoxelSdfGeometry::SdfBranch> branches_B =
+          B.EvaluateSdfBranches(X_BA * p_AV_A);
+      for (const auto& branch_A : branches_A) {
+        const Vector3d& normal_A = branch_A.sample.gradient;
+        for (const auto& branch_B : branches_B) {
+          const Vector3d normal_B_A =
+              X_AB.rotation() * branch_B.sample.gradient;
+          Eigen::Matrix<double, 2, 3> jacobian;
+          jacobian.row(0) = normal_A.transpose();
+          jacobian.row(1) = normal_B_A.transpose();
+          const Eigen::Matrix2d gram = jacobian * jacobian.transpose();
+          const double determinant = gram.determinant();
+          // Parallel surfaces have no boundary line. The tolerance is on the
+          // squared sine of the angle between the two normals.
+          if (!(determinant > 1e-12 * gram(0, 0) * gram(1, 1))) continue;
+          const Eigen::Vector2d residual(branch_A.sample.value,
+                                         branch_B.sample.value);
+          const Vector3d step =
+              -jacobian.transpose() * gram.inverse() * residual;
+          if (!step.allFinite()) continue;
+          const double squared_distance = step.squaredNorm();
+          if (squared_distance < best_squared_distance) {
+            best_squared_distance = squared_distance;
+            best_A = p_AV_A + step;
+          }
+        }
+      }
+      return best_A;
+    }};
+  }
+  MarchingCubesContactBuilder builder(A.voxel_width(), std::move(rim));
 
   for (int k = 0; k < A.mc_cube_counts()[2]; ++k) {
     for (int j = 0; j < A.mc_cube_counts()[1]; ++j) {
@@ -386,6 +459,31 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
   return FinalizeContactSurface<TriMeshBuilder<double>>(
       std::move(mesh_data.builder_A), std::move(grad_p_A_A_per_face),
       std::move(grad_p_B_A_per_face), X_WA, id_A, id_B);
+}
+
+}  // namespace
+
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B) {
+  DRAKE_DEMAND(A.extraction_method() ==
+               VoxelSdfExtractionMethod::kMarchingCubes);
+  return DoCalcVoxelSdfMarchingCubesContact(A, X_WA, id_A, B, X_WB, id_B,
+                                            /* exact_rim = */ false);
+}
+
+std::unique_ptr<ContactSurface<double>>
+CalcVoxelSdfMarchingCubesExactRimContact(const VoxelSdfGeometry& A,
+                                         const math::RigidTransformd& X_WA,
+                                         GeometryId id_A,
+                                         const VoxelSdfGeometry& B,
+                                         const math::RigidTransformd& X_WB,
+                                         GeometryId id_B) {
+  DRAKE_DEMAND(A.extraction_method() ==
+               VoxelSdfExtractionMethod::kMarchingCubesExactRim);
+  return DoCalcVoxelSdfMarchingCubesContact(A, X_WA, id_A, B, X_WB, id_B,
+                                            /* exact_rim = */ true);
 }
 
 }  // namespace hydroelastic
