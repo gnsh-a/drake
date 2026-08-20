@@ -26,6 +26,16 @@ The reference is exact. Both faces are flat and parallel, and the two surfaces
 meet on the circle r = R where both pressures vanish, so the patch is the
 disk's full cross section pi R^2 to within (delta / R)^2.
 
+What this study does not measure: patch area is not the terminal slip-to-spin
+ratio. Running the full trajectory over 2.5 to 0.15625 mm gives eps* errors,
+against affine's 0.6704, of 0.4812 0.2183 0.1330 0.0589 0.0207 for marching
+cubes and 0.2289 0.1017 0.0678 0.0302 0.0117 with the rim projected. Both are
+first order, 1.10 and 1.03; the projection buys a factor of about two in the
+constant and no order at all. Restoring the patch boundary does not restore the
+friction integral over the patch, which the piecewise-linear pressure on a
+triangulated surface still resolves at first order. Do not read second-order
+area convergence as second-order dynamics.
+
 Usage:
   bazel build -c opt //tools/voxel_sdf_experiments/disk_farkas:disk_farkas
   tools/voxel_sdf_experiments/disk_farkas/run_rim_convergence.py \\
