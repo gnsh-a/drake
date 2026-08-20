@@ -22,14 +22,25 @@ post-kick sample whose spin still exceeds kSpinThreshold = 0.1 rad/s. Past that
 the disk has stopped spinning and the ratio |v| / (|wz| R) is either divergent
 or undefined.
 
-The reference is the finest affine value rather than theory. The universal
-terminal ratio for this scene is about 0.653, but affine converges to 0.6704
-here and locks there, and an order measured against the method that has
-converged is the honest one. Reading it against 0.653 instead would fold
-affine's own residual into both marching-cubes series. What anchors that choice
-is not affine's self-consistency but the static ladder: affine reaches 1.000022
-of the closed-form pi R^2, so its limit is validated against something outside
-this study rather than against itself.
+Errors are measured against each representation's own finest run, which is the
+rule the paper already uses, and an order is quoted only when the series decays
+by at least DECAY_GATE over the fitted rungs.
+
+An earlier version of this script defaulted to referencing both marching-cubes
+series against affine's converged eps* of 0.6704, on the argument that affine
+reaching 1.000022 of the closed-form pi R^2 anchors its limit to something
+outside the study. That argument is wrong and the ladder refutes it.
+Tetrahedra reach 1.000018 of the same closed form and converge to 0.6319, held
+to four digits down to 0.012 mm -- two representations with the exact patch
+area in the limit, 5.7% apart in eps*. Exact area therefore does not determine
+eps* and cannot anchor a reference for it. Theory is about 0.653; tet sits 3.2%
+low and affine 2.7% high, so they bracket it and neither is validated by it.
+
+--reference still accepts another representation, because the distance between
+two methods is worth looking at. What it produces is a distance, not a
+convergence order, and the output labels it that way: a slope through
+|eps*_affine - eps*_MC| tells you how fast marching cubes approaches affine's
+answer, which is only an error if affine's answer is right.
 
 The default rungs mix the dyadic ladder with the thickness-aligned one,
 h = 1.75/n, because a purely dyadic subsequence hides what this scene does.
@@ -43,6 +54,24 @@ asymptotic range.
 
 Cases already present in the output file are skipped, so a ladder this long can
 be extended or resumed without repeating what has run.
+
+The phase test, stated before the data existed. The rim deficit is a phase
+quantity set by where the grid falls relative to R, so eps* should scatter with
+grid phase; a rim projected onto the boundary is not placed by the grid, so it
+should scatter less. Two criteria, both fixed in advance and both computed over
+the fitted rungs, h <= 2.5 mm:
+
+  reversals    a rung where refining lowers eps*, against the general rise.
+               Plain marching cubes has two, at 0.4375 and 0.2917 mm.
+               PASS if the projected rim has strictly fewer.
+  backtracking the summed size of those downward steps. Plain marching cubes
+               totals 0.0378 in eps*. PASS if the projected rim is under half
+               of its own plain counterpart's figure.
+
+Both must pass. Reversal count alone is two events and could go either way by
+luck, and backtracking alone could shrink merely because the projected series
+sits closer to the limit everywhere. Failing either means the phase account of
+the deficit is incomplete, which is a result and not a setback.
 
 Usage:
   bazel build -c opt //tools/voxel_sdf_experiments/disk_farkas:disk_farkas
@@ -72,7 +101,12 @@ DEFAULT_RUNGS_MM = (5.0, 2.5, 1.25, 0.875, 0.625, 1.75 / 3.0, 0.4375, 0.3125,
 DEFAULT_FIT_MAX_H_MM = 2.5
 DEFAULT_REPRESENTATIONS = ("plane_clip", "marching_cubes",
                            "marching_cubes_exact_rim")
-DEFAULT_REFERENCE = "plane_clip"
+# Each representation against its own finest run; see the module docstring
+# for why another representation's converged value is not a valid reference.
+DEFAULT_REFERENCE = "self"
+# The paper's rule: a series that has not decayed this far has not earned a
+# slope, whatever the R^2 of one drawn through it.
+DECAY_GATE = 10.0
 # The benchmark's own trajectory settings; see the module docstring.
 SETTLE_TIME_S = 0.05
 SETTLE_TIME_STEP_S = 6.25e-5
@@ -165,8 +199,10 @@ def main():
     parser.add_argument("--representations", default=",".join(
         DEFAULT_REPRESENTATIONS))
     parser.add_argument("--reference", default=DEFAULT_REFERENCE,
-                        help="Representation whose finest rung is the "
-                             "converged value the orders are measured against.")
+                        help="'self' measures each representation against its "
+                             "own finest run and can quote an order. Naming a "
+                             "representation instead measures distance to it, "
+                             "which is not a convergence order.")
     parser.add_argument("--fit_max_h_mm", type=float,
                         default=DEFAULT_FIT_MAX_H_MM,
                         help="Exclude coarser rungs from the order fits.")
@@ -202,35 +238,59 @@ def main():
                 writer.writeheader()
                 writer.writerows(rows)
 
-    finest = min(float(r["h_mm"]) for r in rows)
-    reference_rows = [r for r in rows
-                      if r["representation"] == args.reference
-                      and float(r["h_mm"]) == finest]
-    if not reference_rows:
-        print(f"\nno {args.reference} value at {finest} mm; skipping orders")
-        return 0
-    reference = float(reference_rows[0]["terminal_eps"])
-    print(f"\nreference: {args.reference} at {finest} mm, eps* = "
-          f"{reference:.6f}\n")
-    print(f"terminal-ratio error against it, rungs <= {args.fit_max_h_mm} mm:")
+    fitted = sorted(
+        [r for r in rows if float(r["h_mm"]) <= args.fit_max_h_mm],
+        key=lambda r: -float(r["h_mm"]))
+
+    print(f"\nphase test, rungs <= {args.fit_max_h_mm} mm "
+          f"(criteria fixed before the data; see the module docstring):")
+    backtracking = {}
     for representation in representations:
-        if representation == args.reference:
+        series = [float(r["terminal_eps"]) for r in fitted
+                  if r["representation"] == representation]
+        drops = [a - b for a, b in zip(series, series[1:]) if b < a]
+        backtracking[representation] = sum(drops)
+        print(f"  {representation:<26} n {len(series):2d}  "
+              f"{len(drops)} reversal(s)  backtracking {sum(drops):.4f}")
+
+    print(f"\nterminal-ratio convergence, rungs <= {args.fit_max_h_mm} mm:")
+    for representation in representations:
+        series = [(float(r["h_mm"]), float(r["terminal_eps"])) for r in fitted
+                  if r["representation"] == representation]
+        if len(series) < 4:
+            print(f"  {representation:<26} too few rungs")
             continue
-        points = [(float(r["h_mm"]),
-                   abs(float(r["terminal_eps"]) - reference))
-                  for r in rows if r["representation"] == representation
-                  and float(r["h_mm"]) <= args.fit_max_h_mm]
-        points = [p for p in points if p[1] > 0.0 and math.isfinite(p[1])]
-        order, r_squared = _fit_order(points)
-        ordered = sorted(points, key=lambda p: -p[0])
-        # A series that is not monotone in h is scattering with grid phase
-        # rather than converging cleanly, and a fit through it is worth less
-        # than its R^2 suggests. Say so where the fit is printed.
-        reversals = sum(1 for a, b in zip(ordered, ordered[1:]) if b[1] > a[1])
-        series = "  ".join(f"{e:.4f}" for _, e in ordered)
-        print(f"  {representation:<26} n {len(points):2d}  order {order:5.3f}  "
-              f"R^2 {r_squared:6.3f}  {reversals} reversal(s)")
-        print(f"    {series}")
+        if args.reference == "self":
+            reference = series[-1][1]
+            label = "own finest run"
+            quotable = True
+        else:
+            source = [float(r["terminal_eps"]) for r in rows
+                      if r["representation"] == args.reference]
+            if not source:
+                print(f"  {representation:<26} no {args.reference} rows")
+                continue
+            reference = source[-1]
+            label = f"{args.reference}'s finest run"
+            # Another representation's answer is not this one's limit, so a
+            # slope through the gap is a rate of approach to that answer and
+            # is deliberately not called an order below.
+            quotable = False
+        points = [(h, abs(e - reference)) for h, e in series
+                  if abs(e - reference) > 0.0]
+        if len(points) < 3:
+            print(f"  {representation:<26} degenerate against {label}")
+            continue
+        decay = max(e for _, e in points) / min(e for _, e in points)
+        slope, r_squared = _fit_order(points)
+        head = f"  {representation:<26} vs {label:<22} decay {decay:7.1f}x"
+        if not quotable:
+            print(f"{head}   distance slope {slope:5.3f} (NOT an order)")
+        elif decay >= DECAY_GATE:
+            print(f"{head}   order {slope:5.3f}  R^2 {r_squared:6.3f}")
+        else:
+            print(f"{head}   no order (gate {DECAY_GATE:.0f}x)")
+
     print(f"\nwrote {output}")
     return 0
 
