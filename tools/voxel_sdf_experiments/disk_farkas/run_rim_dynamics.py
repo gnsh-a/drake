@@ -151,7 +151,14 @@ def _terminal_epsilon(rows):
 
 
 def _run_case(binary, representation, h_mm, scratch):
-    trajectory = scratch / f"{representation}_{h_mm}.csv"
+    # Two rungs that differ in the eleventh significant figure are two
+    # different grids, not two spellings of one: 0.583333 spans the disk's
+    # 1.75 mm thickness in four cells and 1.75/3 spans it in three, and their
+    # eps* differ by 12.5%. Naming the output by h alone produced two files
+    # distinguishable only by a trailing digit, and a reader downstream took
+    # them for the same rung. The cell count goes in the name and in the row.
+    cells = math.ceil(1.75 / h_mm - 1e-12)
+    trajectory = scratch / f"{representation}_{h_mm}_n{cells}.csv"
     command = [
         binary,
         f"--representation={representation}",
@@ -177,6 +184,7 @@ def _run_case(binary, representation, h_mm, scratch):
     return {
         "representation": representation,
         "h_mm": f"{h_mm:.17g}",
+        "cells_across_thickness": str(cells),
         "terminal_eps": f"{_terminal_epsilon(rows):.6f}",
         "settled_area_over_exact":
             f"{float(settled['contact_area_m2']) / EXACT_AREA_M2:.9f}",
