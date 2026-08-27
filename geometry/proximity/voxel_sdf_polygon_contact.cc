@@ -427,12 +427,18 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
                                       {});
 }
 
-std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContactOverRange(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
-    const math::RigidTransformd& X_WB, GeometryId id_B) {
+    const math::RigidTransformd& X_WB, GeometryId id_B,
+    const VoxelSdfIndexRange& range) {
   if (B.evaluation_mode() == VoxelSdfEvaluationMode::kStoredGridTrilinear) {
     DRAKE_DEMAND(A.voxel_width() <= B.voxel_width());
+  }
+  for (int axis = 0; axis < 3; ++axis) {
+    DRAKE_DEMAND(0 <= range.begin[axis]);
+    DRAKE_DEMAND(range.begin[axis] <= range.end[axis]);
+    DRAKE_DEMAND(range.end[axis] <= A.cell_counts()[axis]);
   }
   // Traverse and build in A. B's queried point and gradient are converted into
   // A for each cell; no registered representation stores posed data. A may
@@ -447,16 +453,15 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
   // Sampled affine branches lack that guarantee, so remember accepted boundary
   // polygons and suppress only a subsequently confirmed equivalent copy.
   BoundaryPolygonMap accepted_boundary_polygons;
+  const double voxel_radius = 0.5 * A.voxel_width();
+  const double spatial_tolerance = CalcSpatialTolerance(
+      A.voxel_width(), A.characteristic_length(), B.characteristic_length());
 
-  for (int k = 0; k < A.cell_counts()[2]; ++k) {
-    for (int j = 0; j < A.cell_counts()[1]; ++j) {
-      for (int i = 0; i < A.cell_counts()[0]; ++i) {
+  for (int k = range.begin[2]; k < range.end[2]; ++k) {
+    for (int j = range.begin[1]; j < range.end[1]; ++j) {
+      for (int i = range.begin[0]; i < range.end[0]; ++i) {
         const Vector3d center_A = A.cell_center(i, j, k);
         const Vector3d center_B = X_BA * center_A;
-        const double voxel_radius = 0.5 * A.voxel_width();
-        const double spatial_tolerance =
-            CalcSpatialTolerance(A.voxel_width(), A.characteristic_length(),
-                                 B.characteristic_length());
 
         if (B.evaluation_mode() ==
             VoxelSdfEvaluationMode::kStoredGridTrilinear) {
@@ -479,8 +484,8 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
           if (separated) continue;
         }
 
-        // Every A voxel is visited. Pruning below only removes an affine shape
-        // branch whose active region provably cannot intersect this voxel.
+        // Pruning below removes an affine shape branch whose active region
+        // provably cannot intersect this candidate voxel.
         const std::vector<SdfBranch> branches_A =
             PruneBranchesForVoxel(A.CalcCellSdfBranches(i, j, k), center_A,
                                   voxel_radius, spatial_tolerance);
@@ -594,6 +599,17 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
   return FinalizeContactSurface<PolyMeshBuilder<double>>(
       std::move(builder_A), std::move(grad_p_A_A_per_face),
       std::move(grad_p_B_A_per_face), X_WA, id_A, id_B);
+}
+
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B) {
+  const math::RigidTransformd X_AB = X_WA.InvertAndCompose(X_WB);
+  const VoxelSdfIndexRange range = CalcVoxelSdfCandidateRange(
+      A, B, X_AB, VoxelSdfTraversalGrid::kPlaneClipCells);
+  return CalcVoxelSdfPolygonContactOverRange(A, X_WA, id_A, B, X_WB, id_B,
+                                             range);
 }
 
 }  // namespace hydroelastic

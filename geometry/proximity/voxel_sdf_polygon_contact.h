@@ -48,9 +48,10 @@ std::optional<VoxelSdfContactPolygon> CalcVoxelSdfContactPolygon(
     const PressureFieldSample& sdf_A, const PressureFieldSample& sdf_B_A);
 
 /* Calculates a polygonal contact surface between two compliant voxel SDF
- representations. Geometry A's complete core grid is traversed, and all
- intermediate geometry is constructed in frame A before the result is
- transformed to World. Each geometry follows its own selected evaluation mode.
+ representations. A conservative query-time range of Geometry A's core grid is
+ traversed, and all intermediate geometry is constructed in frame A before the
+ result is transformed to World. Each geometry follows its own selected
+ evaluation mode.
 
  The returned surface owns its mesh, pressure field, and constituent pressure
  gradients; it retains no references to either registered representation or
@@ -69,6 +70,15 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B);
+
+/* As above, but traverses exactly `range`. This supports exhaustive-reference
+ tests and performance benchmarks; production queries should use
+ CalcVoxelSdfPolygonContact(). */
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfPolygonContactOverRange(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B,
+    const VoxelSdfIndexRange& range);
 
 }  // namespace hydroelastic
 }  // namespace internal

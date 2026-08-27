@@ -20,7 +20,79 @@ using Eigen::Vector3d;
 
 constexpr double kToleranceScale = 64.0;
 
+struct TraversalGridData {
+  Vector3<int> counts;
+  Vector3d first_center;
+};
+
+TraversalGridData GetTraversalGridData(const VoxelSdfGeometry& A,
+                                       VoxelSdfTraversalGrid grid) {
+  switch (grid) {
+    case VoxelSdfTraversalGrid::kPlaneClipCells:
+      return TraversalGridData{A.cell_counts(), A.cell_center(0, 0, 0)};
+    case VoxelSdfTraversalGrid::kMarchingCubes:
+      return TraversalGridData{A.mc_cube_counts(),
+                               A.mc_node_position(0, 0, 0) +
+                                   Vector3d::Constant(0.5 * A.voxel_width())};
+  }
+  DRAKE_UNREACHABLE();
+}
+
 }  // namespace
+
+VoxelSdfIndexRange MakeFullVoxelSdfIndexRange(const VoxelSdfGeometry& A,
+                                              VoxelSdfTraversalGrid grid) {
+  return VoxelSdfIndexRange{Vector3<int>::Zero(),
+                            GetTraversalGridData(A, grid).counts};
+}
+
+VoxelSdfIndexRange CalcVoxelSdfCandidateRange(const VoxelSdfGeometry& A,
+                                              const VoxelSdfGeometry& B,
+                                              const math::RigidTransformd& X_AB,
+                                              VoxelSdfTraversalGrid grid) {
+  const TraversalGridData data = GetTraversalGridData(A, grid);
+  const Vector3d center_A = X_AB.translation();
+  const double spatial_tolerance = CalcSpatialTolerance(
+      A.voxel_width(), A.characteristic_length(), B.characteristic_length());
+  const double halo =
+      0.5 * std::sqrt(3.0) * A.voxel_width() + spatial_tolerance;
+  // Expand in B before transforming the box. A host element is contained by a
+  // radius-`halo` ball about its center, so every B coordinate can move by at
+  // most `halo`. Transforming this expanded B-frame box is conservative under
+  // arbitrary relative rotation, including for Cylinder's cap/radial branch
+  // partition and the stored-grid interpolation-domain test.
+  const Vector3d expanded_half_width_B =
+      -B.lower_cell_boundary() + Vector3d::Constant(halo);
+  const Vector3d extent_A =
+      X_AB.rotation().matrix().cwiseAbs() * expanded_half_width_B;
+  Vector3d lower_A = center_A - extent_A;
+  Vector3d upper_A = center_A + extent_A;
+  for (int axis = 0; axis < 3; ++axis) {
+    lower_A[axis] =
+        std::nextafter(lower_A[axis], -std::numeric_limits<double>::infinity());
+    upper_A[axis] =
+        std::nextafter(upper_A[axis], std::numeric_limits<double>::infinity());
+  }
+
+  VoxelSdfIndexRange result;
+  for (int axis = 0; axis < 3; ++axis) {
+    const int count = data.counts[axis];
+    const double first = data.first_center[axis];
+    const double last =
+        std::fma(A.voxel_width(), static_cast<double>(count - 1), first);
+    if (upper_A[axis] < first || lower_A[axis] > last) return {};
+
+    const double clipped_lower = std::max(lower_A[axis], first);
+    const double clipped_upper = std::min(upper_A[axis], last);
+    const double first_index =
+        std::ceil((clipped_lower - first) / A.voxel_width());
+    const double last_index =
+        std::floor((clipped_upper - first) / A.voxel_width());
+    result.begin[axis] = std::clamp(static_cast<int>(first_index), 0, count);
+    result.end[axis] = std::clamp(static_cast<int>(last_index) + 1, 0, count);
+  }
+  return result;
+}
 
 PressureFieldSample MakePressureField(const VoxelSdfGeometry& geometry,
                                       const VoxelSdfShape::Sample& sample) {

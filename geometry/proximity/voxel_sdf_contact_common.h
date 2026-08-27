@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -13,6 +14,39 @@ namespace drake {
 namespace geometry {
 namespace internal {
 namespace hydroelastic {
+
+enum class VoxelSdfTraversalGrid {
+  kPlaneClipCells,
+  kMarchingCubes,
+};
+
+/* A rectangular, half-open range of indices in one of a voxel SDF's contact
+ traversal grids. */
+struct VoxelSdfIndexRange {
+  Vector3<int> begin{Vector3<int>::Zero()};
+  Vector3<int> end{Vector3<int>::Zero()};
+
+  bool empty() const { return (begin.array() >= end.array()).any(); }
+
+  int64_t num_elements() const {
+    if (empty()) return 0;
+    const Vector3<int> extent = end - begin;
+    return static_cast<int64_t>(extent[0]) * extent[1] * extent[2];
+  }
+};
+
+/* Returns the complete range for `grid` in A. */
+VoxelSdfIndexRange MakeFullVoxelSdfIndexRange(const VoxelSdfGeometry& A,
+                                              VoxelSdfTraversalGrid grid);
+
+/* Returns a conservative range of A elements that can contribute contact with
+ B. B's core-grid box is expanded in B by an A-element circumscribed radius
+ plus spatial tolerance, transformed into A, and enclosed by an AABB before its
+ bounds are mapped outward to integer indices. */
+VoxelSdfIndexRange CalcVoxelSdfCandidateRange(const VoxelSdfGeometry& A,
+                                              const VoxelSdfGeometry& B,
+                                              const math::RigidTransformd& X_AB,
+                                              VoxelSdfTraversalGrid grid);
 
 /* One signed-distance-field sample together with the scales needed to convert
  it to a pressure field. The sample's value and gradient must be expressed in

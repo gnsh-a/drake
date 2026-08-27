@@ -328,16 +328,25 @@ MarchingCubesMeshData MarchingCubesContactBuilder::TakeMeshData() && {
   return std::move(mesh_data_);
 }
 
-std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
-    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
-    GeometryId id_A, const VoxelSdfGeometry& B,
-    const math::RigidTransformd& X_WB, GeometryId id_B) {
+std::unique_ptr<ContactSurface<double>>
+CalcVoxelSdfMarchingCubesContactOverRange(const VoxelSdfGeometry& A,
+                                          const math::RigidTransformd& X_WA,
+                                          GeometryId id_A,
+                                          const VoxelSdfGeometry& B,
+                                          const math::RigidTransformd& X_WB,
+                                          GeometryId id_B,
+                                          const VoxelSdfIndexRange& range) {
   DRAKE_DEMAND(A.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf);
   DRAKE_DEMAND(B.evaluation_mode() == VoxelSdfEvaluationMode::kPrimitiveSdf);
   DRAKE_DEMAND(A.extraction_method() ==
                VoxelSdfExtractionMethod::kMarchingCubes);
   DRAKE_DEMAND(B.extraction_method() ==
                VoxelSdfExtractionMethod::kMarchingCubes);
+  for (int axis = 0; axis < 3; ++axis) {
+    DRAKE_DEMAND(0 <= range.begin[axis]);
+    DRAKE_DEMAND(range.begin[axis] <= range.end[axis]);
+    DRAKE_DEMAND(range.end[axis] <= A.mc_cube_counts()[axis]);
+  }
 
   // Traverse and build in A. Every query of B is expressed in B, and its
   // pressure gradient is re-expressed in A. Registered geometry stores no
@@ -346,9 +355,9 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
   const math::RigidTransformd X_BA = X_AB.inverse();
   MarchingCubesContactBuilder builder(A.voxel_width());
 
-  for (int k = 0; k < A.mc_cube_counts()[2]; ++k) {
-    for (int j = 0; j < A.mc_cube_counts()[1]; ++j) {
-      for (int i = 0; i < A.mc_cube_counts()[0]; ++i) {
+  for (int k = range.begin[2]; k < range.end[2]; ++k) {
+    for (int j = range.begin[1]; j < range.end[1]; ++j) {
+      for (int i = range.begin[0]; i < range.end[0]; ++i) {
         const Vector3<int> cube_index(i, j, k);
         std::array<MarchingCubesNode, 8> nodes_A;
         for (int corner = 0; corner < 8; ++corner) {
@@ -386,6 +395,17 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
   return FinalizeContactSurface<TriMeshBuilder<double>>(
       std::move(mesh_data.builder_A), std::move(grad_p_A_A_per_face),
       std::move(grad_p_B_A_per_face), X_WA, id_A, id_B);
+}
+
+std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
+    const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
+    GeometryId id_A, const VoxelSdfGeometry& B,
+    const math::RigidTransformd& X_WB, GeometryId id_B) {
+  const math::RigidTransformd X_AB = X_WA.InvertAndCompose(X_WB);
+  const VoxelSdfIndexRange range = CalcVoxelSdfCandidateRange(
+      A, B, X_AB, VoxelSdfTraversalGrid::kMarchingCubes);
+  return CalcVoxelSdfMarchingCubesContactOverRange(A, X_WA, id_A, B, X_WB, id_B,
+                                                   range);
 }
 
 }  // namespace hydroelastic

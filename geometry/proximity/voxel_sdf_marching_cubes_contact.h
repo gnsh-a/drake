@@ -18,6 +18,8 @@ namespace geometry {
 namespace internal {
 namespace hydroelastic {
 
+struct VoxelSdfIndexRange;
+
 /* Values at one dual-grid node used by the internal marching-cubes substrate.
  The position is measured and expressed in frame A. Pressures are scalars; this
  type owns its data and retains no reference to registered geometry. */
@@ -69,9 +71,9 @@ class MarchingCubesContactBuilder final {
 };
 
 /* Calculates a triangular contact surface between two compliant voxel SDF
- representations using marching cubes. Geometry A's complete dual-grid cube
- lattice is traversed. All intermediate geometry is constructed in frame A,
- and B's primitive SDF is evaluated in frame B.
+ representations using marching cubes. A conservative query-time range of
+ Geometry A's dual-grid cube lattice is traversed. All intermediate geometry
+ is constructed in frame A, and B's primitive SDF is evaluated in frame B.
 
  The returned surface owns its mesh, pressure field, and constituent pressure
  gradients; it retains no references to either registered representation,
@@ -85,6 +87,18 @@ std::unique_ptr<ContactSurface<double>> CalcVoxelSdfMarchingCubesContact(
     const VoxelSdfGeometry& A, const math::RigidTransformd& X_WA,
     GeometryId id_A, const VoxelSdfGeometry& B,
     const math::RigidTransformd& X_WB, GeometryId id_B);
+
+/* As above, but traverses exactly `range`. This supports exhaustive-reference
+ tests and performance benchmarks; production queries should use
+ CalcVoxelSdfMarchingCubesContact(). */
+std::unique_ptr<ContactSurface<double>>
+CalcVoxelSdfMarchingCubesContactOverRange(const VoxelSdfGeometry& A,
+                                          const math::RigidTransformd& X_WA,
+                                          GeometryId id_A,
+                                          const VoxelSdfGeometry& B,
+                                          const math::RigidTransformd& X_WB,
+                                          GeometryId id_B,
+                                          const VoxelSdfIndexRange& range);
 
 }  // namespace hydroelastic
 }  // namespace internal
