@@ -24,6 +24,9 @@ DEFINE_double(period, 3.0, "Square-wave period in seconds.");
 DEFINE_string(output,
               "tools/voxel_sdf_experiments/out/spatula_slip/spatula_slip.csv",
               "Trajectory CSV path; empty disables CSV output.");
+DEFINE_string(frames_dir, "",
+              "Directory for Drake-rendered PNG frames; empty disables "
+              "rendering.");
 
 namespace drake {
 namespace tools {
@@ -43,6 +46,7 @@ int DoMain() {
   config.duty_cycle = FLAGS_duty_cycle;
   config.period = FLAGS_period;
   config.output = std::filesystem::path(FLAGS_output);
+  config.frames_dir = std::filesystem::path(FLAGS_frames_dir);
   const SpatulaSlipResult result = RunSpatulaSlip(config);
   std::cout << "representation=" << to_string(config.representation)
             << ", scale=" << config.resolution_scale

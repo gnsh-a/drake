@@ -18,8 +18,12 @@
 #include "drake/common/drake_copyable.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/query_results/contact_surface.h"
+#include "drake/geometry/render/render_camera.h"
+#include "drake/geometry/render_vtk/factory.h"
 #include "drake/geometry/scene_graph.h"
 #include "drake/math/roll_pitch_yaw.h"
+#include "drake/math/rotation_matrix.h"
+#include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
 #include "drake/multibody/math/spatial_algebra.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/contact_results.h"
@@ -33,7 +37,11 @@
 #include "drake/systems/framework/leaf_system.h"
 #include "drake/systems/primitives/adder.h"
 #include "drake/systems/primitives/constant_vector_source.h"
+#include "drake/systems/sensors/image_writer.h"
+#include "drake/systems/sensors/rgbd_sensor.h"
+#include "drake/tools/voxel_sdf_experiments/common/components.h"
 #include "drake/tools/voxel_sdf_experiments/common/emit.h"
+#include "drake/tools/voxel_sdf_experiments/common/surface_view.h"
 
 namespace drake {
 namespace tools {
@@ -43,9 +51,13 @@ namespace {
 using Eigen::Vector3d;
 using geometry::GeometryId;
 using geometry::ProximityProperties;
+using geometry::RenderEngineVtkParams;
 using geometry::SceneGraph;
+using geometry::render::ColorRenderCamera;
+using geometry::render::DepthRenderCamera;
 using math::RigidTransformd;
 using math::RollPitchYawd;
+using math::RotationMatrixd;
 using multibody::ContactModel;
 using multibody::ContactResults;
 using multibody::DiscreteContactApproximation;
@@ -54,11 +66,15 @@ using multibody::MultibodyPlant;
 using multibody::PrismaticJoint;
 using multibody::RigidBody;
 using multibody::SpatialForce;
+using multibody::contact_solvers::internal::SapStatistics;
 using systems::BasicVector;
 using systems::Context;
 using systems::Diagram;
 using systems::DiagramBuilder;
 using systems::Simulator;
+using systems::sensors::ImageRgba8U;
+using systems::sensors::RgbdSensor;
+using systems::sensors::SaveToPng;
 
 constexpr double kNegativePressureTolerance = 1.0e-7;
 constexpr std::string_view kCsvHeader =
@@ -69,9 +85,12 @@ constexpr std::string_view kCsvHeader =
     "point_contacts,hydro_contacts,spatula_contacts,"
     "left_contact_force_x_n,left_contact_force_y_n,left_contact_force_z_n,"
     "left_handle_axis_torque_nm,left_contact_area_m2,left_surface_faces,"
+    "left_num_components,left_largest_component_area_fraction,"
     "right_contact_force_x_n,right_contact_force_y_n,"
     "right_contact_force_z_n,right_handle_axis_torque_nm,"
-    "right_contact_area_m2,right_surface_faces";
+    "right_contact_area_m2,right_surface_faces,right_num_components,"
+    "right_largest_component_area_fraction,sap_iters,"
+    "sap_line_search_iters,sap_converged";
 
 void ThrowUnlessFinitePositive(double value, std::string_view name) {
   if (!(std::isfinite(value) && value > 0.0)) {
@@ -248,7 +267,18 @@ struct BuiltScene {
   RigidTransformd X_BH;
   ResolutionData resolutions;
   bool expect_triangles{};
+  const RgbdSensor* camera{};
 };
+
+RigidTransformd MakeCameraPose() {
+  const Vector3d p_WC(0.78, -0.62, 0.53);
+  const Vector3d p_WT(0.22, 0.0, 0.24);
+  const Vector3d Cz_W = (p_WT - p_WC).normalized();
+  const Vector3d Cx_W = -Vector3d::UnitZ().cross(Cz_W).normalized();
+  const Vector3d Cy_W = Cz_W.cross(Cx_W).normalized();
+  return RigidTransformd(
+      RotationMatrixd::MakeFromOrthonormalColumns(Cx_W, Cy_W, Cz_W), p_WC);
+}
 
 BuiltScene BuildScene(const SpatulaSlipConfig& config) {
   DiagramBuilder<double> builder;
@@ -295,6 +325,24 @@ BuiltScene BuildScene(const SpatulaSlipConfig& config) {
   plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("gripper"), X_WG);
   plant.Finalize();
 
+  const RgbdSensor* camera{};
+  if (!config.frames_dir.empty()) {
+    constexpr std::string_view kRendererName = "spatula_video_renderer";
+    RenderEngineVtkParams renderer_params;
+    renderer_params.default_clear_color = Vector3d::Ones();
+    scene_graph.AddRenderer(std::string(kRendererName),
+                            geometry::MakeRenderEngineVtk(renderer_params));
+    const ColorRenderCamera color_camera{
+        {std::string(kRendererName), {512, 512, M_PI / 6.0}, {0.05, 3.0}, {}},
+        false};
+    const DepthRenderCamera depth_camera{color_camera.core(), {0.05, 3.0}};
+    camera = builder.AddSystem<RgbdSensor>(scene_graph.world_frame_id(),
+                                           MakeCameraPose(), color_camera,
+                                           depth_camera);
+    builder.Connect(scene_graph.get_query_output_port(),
+                    camera->query_object_input_port());
+  }
+
   const auto& square = *builder.AddSystem<SquareForce>(
       config.amplitude, config.duty_cycle, config.period);
   const auto& constant =
@@ -318,6 +366,7 @@ BuiltScene BuildScene(const SpatulaSlipConfig& config) {
   result.resolutions = resolutions;
   result.expect_triangles =
       config.representation == Representation::kMarchingCubes;
+  result.camera = camera;
   result.diagram = builder.Build();
   return result;
 }
@@ -362,6 +411,15 @@ SpatulaSlipRow SampleRow(const BuiltScene& scene,
   row.left_finger_position = scene.left_joint->get_translation(plant_context);
   row.right_finger_position = scene.right_joint->get_translation(plant_context);
 
+  const std::optional<SapStatistics> sap =
+      scene.plant->EvalSapSolverStatistics(plant_context);
+  if (sap.has_value()) {
+    row.sap_iters = sap->num_iters;
+    row.sap_line_search_iters = sap->num_line_search_iters;
+    row.sap_converged =
+        sap->optimality_criterion_reached || sap->cost_criterion_reached;
+  }
+
   const ContactResults<double>& contacts =
       scene.plant->get_contact_results_output_port()
           .Eval<ContactResults<double>>(plant_context);
@@ -398,18 +456,24 @@ SpatulaSlipRow SampleRow(const BuiltScene& scene,
     double* torque{};
     double* area{};
     int* faces{};
+    int* components{};
+    double* largest_fraction{};
     if (finger_id == scene.geometry_ids.left_finger) {
       seen = &left_seen;
       force = &row.left_contact_force_W;
       torque = &row.left_handle_axis_torque;
       area = &row.left_contact_area;
       faces = &row.left_surface_faces;
+      components = &row.left_num_components;
+      largest_fraction = &row.left_largest_component_area_fraction;
     } else if (finger_id == scene.geometry_ids.right_finger) {
       seen = &right_seen;
       force = &row.right_contact_force_W;
       torque = &row.right_handle_axis_torque;
       area = &row.right_contact_area;
       faces = &row.right_surface_faces;
+      components = &row.right_num_components;
+      largest_fraction = &row.right_largest_component_area_fraction;
     } else {
       throw std::runtime_error("Spatula contacted an unexpected geometry");
     }
@@ -425,6 +489,17 @@ SpatulaSlipRow SampleRow(const BuiltScene& scene,
     *torque = F_Sh_W.rotational().dot(row.handle_axis_W);
     *area = surface.total_area();
     *faces = surface.num_faces();
+    /* Fragmentation of this finger's patch. The area is summed from the view
+     rather than taken from total_area() so the fraction's denominator is the
+     same sum its numerator came from; the two agree to rounding, and a
+     fraction that can exceed one from a mismatched denominator is worse than
+     a slightly different total. */
+    const SurfaceView view = MakeSurfaceView(surface);
+    double view_area = 0.0;
+    for (const Face& face : view.faces) view_area += face.area;
+    const ComponentStats stats = CalcComponentStats(view, view_area);
+    *components = stats.num_components;
+    *largest_fraction = stats.largest_area_fraction;
   }
 
   if (!row.position_WB.allFinite() || !row.quaternion_WB.coeffs().allFinite() ||
@@ -482,11 +557,16 @@ void WriteCsv(const SpatulaSlipConfig& config,
            << row.left_contact_force_W.y() << ','
            << row.left_contact_force_W.z() << ',' << row.left_handle_axis_torque
            << ',' << row.left_contact_area << ',' << row.left_surface_faces
-           << ',' << row.right_contact_force_W.x() << ','
+           << ',' << row.left_num_components << ','
+           << row.left_largest_component_area_fraction << ','
+           << row.right_contact_force_W.x() << ','
            << row.right_contact_force_W.y() << ','
            << row.right_contact_force_W.z() << ','
            << row.right_handle_axis_torque << ',' << row.right_contact_area
-           << ',' << row.right_surface_faces << '\n';
+           << ',' << row.right_surface_faces << ',' << row.right_num_components
+           << ',' << row.right_largest_component_area_fraction << ','
+           << row.sap_iters << ',' << row.sap_line_search_iters << ','
+           << (row.sap_converged ? "true" : "false") << '\n';
   }
   if (!output) {
     throw std::runtime_error("Failed while writing trajectory CSV '" +
@@ -498,6 +578,9 @@ void WriteCsv(const SpatulaSlipConfig& config,
 
 SpatulaSlipResult RunSpatulaSlip(const SpatulaSlipConfig& config) {
   ValidateConfig(config);
+  if (!config.frames_dir.empty()) {
+    std::filesystem::create_directories(config.frames_dir);
+  }
   BuiltScene scene = BuildScene(config);
   SpatulaSlipResult result;
   result.ellipsoid_base_resolution = scene.resolutions.ellipsoid_base;
@@ -524,6 +607,16 @@ SpatulaSlipResult RunSpatulaSlip(const SpatulaSlipConfig& config) {
   for (int frame = 0; frame <= frames; ++frame) {
     if (frame > 0) simulator.AdvanceTo(frame * config.sample_period);
     SpatulaSlipRow row = SampleRow(scene, simulator.get_context());
+    if (scene.camera != nullptr) {
+      const Context<double>& camera_context =
+          scene.camera->GetMyContextFromRoot(simulator.get_context());
+      const ImageRgba8U& image =
+          scene.camera->color_image_output_port().Eval<ImageRgba8U>(
+              camera_context);
+      SaveToPng(image,
+                (config.frames_dir / fmt::format("frame_{:04d}.png", frame))
+                    .string());
+    }
     if (row.spatula_contacts > 0) ++result.contact_samples;
     if (row.spatula_contacts == 2) ++result.two_finger_contact_samples;
     if (scene.expect_triangles) {
@@ -539,10 +632,49 @@ SpatulaSlipResult RunSpatulaSlip(const SpatulaSlipConfig& config) {
     result.max_contact_area =
         std::max({result.max_contact_area, row.left_contact_area,
                   row.right_contact_area});
+    result.max_num_components =
+        std::max({result.max_num_components, row.left_num_components,
+                  row.right_num_components});
+    /* Only a frame that has a patch can report a fraction. A no-contact frame
+     leaves the field at zero, and taking a minimum over those would report
+     total fragmentation for a gripper that simply let go. */
+    if (row.left_num_components > 0) {
+      result.min_largest_component_area_fraction =
+          std::min(result.min_largest_component_area_fraction,
+                   row.left_largest_component_area_fraction);
+    }
+    if (row.right_num_components > 0) {
+      result.min_largest_component_area_fraction =
+          std::min(result.min_largest_component_area_fraction,
+                   row.right_largest_component_area_fraction);
+    }
+    result.max_sap_iters = std::max(result.max_sap_iters, row.sap_iters);
+    if (!row.sap_converged) ++result.sap_nonconverged_steps;
     result.rows.push_back(std::move(row));
   }
 
+  /* The task outcome. Contact is lost and regained during normal slipping, so
+   the reported loss is the start of the run of lost frames that reaches the
+   end: that is the one the gripper never recovered from. `held` is read from
+   the final frame rather than from any threshold on displacement, because a
+   dropped spatula's displacement is just how far it happened to fall. */
   const SpatulaSlipRow& initial = result.rows.front();
+  result.held = result.rows.back().spatula_contacts > 0;
+  if (!result.held) {
+    for (auto row = result.rows.rbegin(); row != result.rows.rend(); ++row) {
+      if (row->spatula_contacts > 0) break;
+      result.first_contact_loss_time = row->time;
+    }
+  }
+  /* Slip along the handle axis, measured while held. Projecting onto the
+   initial handle direction rather than onto world z keeps the measure about
+   sliding through the fingers rather than about the spatula's own rotation. */
+  for (const SpatulaSlipRow& row : result.rows) {
+    if (row.spatula_contacts == 0) break;
+    result.handle_axis_slip = std::max(
+        result.handle_axis_slip,
+        (initial.position_WB - row.position_WB).dot(initial.handle_axis_W));
+  }
   for (const SpatulaSlipRow& row : result.rows) {
     result.max_position_displacement =
         std::max(result.max_position_displacement,

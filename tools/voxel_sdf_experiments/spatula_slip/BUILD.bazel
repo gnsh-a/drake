@@ -21,7 +21,10 @@ drake_cc_library(
         "//geometry:proximity_properties",
         "//geometry:scene_graph",
         "//geometry/query_results:contact_surface",
+        "//geometry/render:render_camera",
+        "//geometry/render_vtk",
         "//math:geometric_transform",
+        "//multibody/contact_solvers/sap:sap_solver_statistics",
         "//multibody/math:spatial_algebra",
         "//multibody/parsing",
         "//multibody/plant",
@@ -34,8 +37,12 @@ drake_cc_library(
         "//systems/framework:leaf_system",
         "//systems/framework:vector",
         "//systems/primitives",
+        "//systems/sensors:image_writer",
+        "//systems/sensors:rgbd_sensor",
+        "//tools/voxel_sdf_experiments/common:components",
         "//tools/voxel_sdf_experiments/common:emit",
         "//tools/voxel_sdf_experiments/common:representation",
+        "//tools/voxel_sdf_experiments/common:surface_view",
         "@fmt",
     ],
 )
@@ -46,6 +53,7 @@ drake_cc_binary(
     deps = [
         ":spatula_slip_lib",
         "//tools/voxel_sdf_experiments/common:representation",
+        "//tools/voxel_sdf_experiments/common:surface_view",
         "@gflags",
     ],
 )
