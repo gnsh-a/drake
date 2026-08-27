@@ -75,6 +75,23 @@ drake_cc_googlebench_binary(
     test_rule_timeout = "moderate",
 )
 
+drake_cc_googlebench_binary(
+    name = "voxel_sdf_broadphase_benchmark",
+    srcs = ["voxel_sdf_broadphase_benchmark.cc"],
+    deps = [
+        "//geometry:geometry_ids",
+        "//geometry:shape_specification",
+        "//geometry/proximity:voxel_sdf_contact_common",
+        "//geometry/proximity:voxel_sdf_geometry",
+        "//geometry/proximity:voxel_sdf_marching_cubes_contact",
+        "//geometry/proximity:voxel_sdf_polygon_contact",
+        "//math:geometric_transform",
+        "//tools/performance:gflags_main",
+    ],
+    add_test_rule = True,
+    test_rule_timeout = "moderate",
+)
+
 drake_py_experiment_binary(
     name = "mesh_intersection_experiment",
     googlebench_binary = ":mesh_intersection_benchmark",
