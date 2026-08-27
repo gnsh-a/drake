@@ -73,6 +73,43 @@ geometry's hydroelastic modulus, dissipation, friction, and resolution hint;
 the resolution hint becomes the voxel width. This mode currently requires
 `--contact_surface_representation=polygon`.
 
+Use `--voxel_sdf_width_scale` to refine all voxel widths without changing the
+tetrahedral model. For example, `--voxel_sdf_width_scale=0.5` changes the
+bubble widths from 40 mm to 20 mm and the spatula width from 5 mm to 2.5 mm.
+Use `--tet_resolution_hint_scale=0.5` with the tet representation to apply the
+same refinement to its meshing hints.
+
+## Compare tet and voxel-SDF trajectories
+
+Run the controlled 30-second comparison without Meshcat:
+
+```
+python3 \
+  examples/hydroelastic/spatula_slip_control/compare_trajectories.py
+```
+
+The script runs the original, 2x-refined, and 4x-refined tet models together
+with 2x-refined and 4x-refined voxel-SDF models. It writes five CSV trajectories
+plus one overlay plot to `examples/hydroelastic/spatula_slip_control/out/`. The
+plot compares spatula position and handle-axis swing, finger positions, and
+each finger's contact force and handle-axis torque. Use `--plot-only` to redraw
+the plot from existing CSVs.
+
+## Benchmark simulation-only realtime factor
+
+Build an optimized binary and benchmark all three tet and three voxel-SDF
+resolutions without visualization or trajectory sampling:
+
+```
+python3 \
+  examples/hydroelastic/spatula_slip_control/benchmark_rtf.py
+```
+
+The script performs one warm-up and three measured 30-second simulations per
+case. It uses Drake Simulator's achieved realtime rate after resetting its
+statistics immediately before `AdvanceTo()`. Results are written to
+`examples/hydroelastic/spatula_slip_control/out/`.
+
 ## Illustration and Collision geometries
 
 In Meshcat, you can view illustration geometries or 
