@@ -14,6 +14,7 @@ extraction_timing.
 """
 
 import argparse
+import concurrent.futures
 import csv
 from dataclasses import dataclass
 import json
@@ -31,6 +32,10 @@ FORCE_PRACTICAL_LIMIT = 10.0 * FORCE_REFERENCE_FLOOR
 AREA_PRACTICAL_LIMIT = 10.0 * AREA_REFERENCE_FLOOR
 FINEST_STATIC_MC_FORCE_ERROR = 0.004407
 TIME_FORMAT = "wall_s=%e\nmax_rss_kib=%M\nexit_code=%x"
+# The scene's baseline grip. It is deliberately marginal: the spatula slides
+# through the fingers for the whole run in every representation, which is what
+# makes the scene a slip test rather than a hold test.
+DEFAULT_GRIPPER_FORCE_N = 1.5
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,12 @@ class Case:
     representation: str
     scale: float
     is_reference: bool = False
+    gripper_force: float = DEFAULT_GRIPPER_FORCE_N
+
+
+def _label(value: float) -> str:
+    """A filename-safe label for a numeric parameter, as 1.25 -> 1p25."""
+    return f"{value:g}".replace(".", "p").replace("-", "m")
 
 
 def _workspace_root() -> pathlib.Path:
@@ -158,6 +169,7 @@ def _run_case(
         f"--duration={duration:.17g}",
         f"--time_step={time_step:.17g}",
         f"--sample_period={sample_period:.17g}",
+        f"--gripper_force={case.gripper_force:.17g}",
         f"--output={csv_path}",
     ]
     completed = subprocess.run(
@@ -172,7 +184,9 @@ def _run_case(
             f"{case.label} failed with exit code {completed.returncode}"
         )
     timing = _parse_time_output(raw_timing_path)
-    timing_path.write_text(json.dumps(timing, indent=2) + "\n", encoding="utf-8")
+    timing_path.write_text(
+        json.dumps(timing, indent=2) + "\n", encoding="utf-8"
+    )
     raw_timing_path.unlink()
     if not _trajectory_is_complete(csv_path, case, duration, sample_period):
         raise RuntimeError(f"{case.label} wrote an incomplete trajectory")
@@ -185,7 +199,14 @@ def _run_case(
     return csv_path, timing
 
 
-_STRING_FIELDS = {"git_commit", "git_dirty", "representation"}
+# Every other column is parsed as a float and checked finite, so a column
+# holding text has to be named here or the read fails on it.
+_STRING_FIELDS = {
+    "git_commit",
+    "git_dirty",
+    "representation",
+    "sap_converged",
+}
 
 
 def _read_trajectory(path: pathlib.Path) -> list[dict[str, float | str]]:
@@ -200,7 +221,9 @@ def _read_trajectory(path: pathlib.Path) -> list[dict[str, float | str]]:
                 else:
                     number = float(value)
                     if not math.isfinite(number):
-                        raise RuntimeError(f"{path} contains non-finite {field}")
+                        raise RuntimeError(
+                            f"{path} contains non-finite {field}"
+                        )
                     row[field] = number
             rows.append(row)
     if not rows:
@@ -208,7 +231,9 @@ def _read_trajectory(path: pathlib.Path) -> list[dict[str, float | str]]:
     return rows
 
 
-def _vector(row: dict[str, float | str], fields: tuple[str, ...]) -> tuple[float, ...]:
+def _vector(
+    row: dict[str, float | str], fields: tuple[str, ...]
+) -> tuple[float, ...]:
     return tuple(float(row[field]) for field in fields)
 
 
@@ -276,6 +301,14 @@ def _compare(
     rows: list[dict[str, float | str]],
     reference: list[dict[str, float | str]],
 ) -> dict[str, float | str | bool]:
+    """Trajectory error against the reference, plus the task outcome.
+
+    A run that dropped the spatula reports no trajectory error. Its position
+    diverges as free fall, so an RMS against a reference measures the length of
+    the fall: the coarse affine run reads 47.7 m, which is not an accuracy and
+    must not enter a table or a fit as though it were one. The outcome fields
+    stay populated, because "dropped at 23.3 s" is the finding.
+    """
     if len(rows) != len(reference):
         raise RuntimeError(
             f"{case.label} has {len(rows)} samples; reference has {len(reference)}"
@@ -349,22 +382,14 @@ def _compare(
     )
     force_floor_margin = force_relative / FORCE_PRACTICAL_LIMIT
     area_floor_margin = area_relative / AREA_PRACTICAL_LIMIT
-    return {
-        "tier": case.tier,
-        "representation": case.representation,
-        "resolution_scale": case.scale,
-        "reference_resolution_scale": REFERENCE_SCALE,
-        "samples": len(rows),
+    outcome = _outcome(rows)
+    trajectory = {
         "position_rms_m": _rms(position_errors),
         "position_max_m": max(position_errors),
         "orientation_rms_rad": _rms(orientation_errors),
         "orientation_max_rad": max(orientation_errors),
         "handle_axis_swing_rms_error_rad": _rms(swing_errors),
         "handle_axis_swing_max_error_rad": max(swing_errors),
-        "peak_handle_axis_swing_rad": max(swings),
-        "reference_peak_handle_axis_swing_rad": max(reference_swings),
-        "finger_position_rms_m": _rms(finger_errors),
-        "finger_position_max_m": max(finger_errors),
         "contact_force_rms_n": force_rms,
         "contact_force_max_n": force_max,
         "contact_force_relative_rms": force_relative,
@@ -374,11 +399,86 @@ def _compare(
         "contact_area_rms_m2": area_rms,
         "contact_area_max_m2": area_max,
         "contact_area_relative_rms": area_relative,
-        "two_finger_contact_fraction": two_finger_samples / len(rows),
-        "contact_count_mismatch_fraction": contact_mismatches / len(rows),
         "force_floor_margin_x": force_floor_margin,
         "area_floor_margin_x": area_floor_margin,
         "floor_limited": force_floor_margin <= 1.0 or area_floor_margin <= 1.0,
+    }
+    if not outcome["held"]:
+        trajectory = dict.fromkeys(trajectory, None)
+    return {
+        "tier": case.tier,
+        "representation": case.representation,
+        "resolution_scale": case.scale,
+        "reference_resolution_scale": REFERENCE_SCALE,
+        "samples": len(rows),
+        **outcome,
+        "reference_handle_axis_slip_m": _outcome(reference)[
+            "handle_axis_slip_m"
+        ],
+        "peak_handle_axis_swing_rad": max(swings),
+        "reference_peak_handle_axis_swing_rad": max(reference_swings),
+        "finger_position_rms_m": _rms(finger_errors)
+        if outcome["held"]
+        else None,
+        "finger_position_max_m": max(finger_errors)
+        if outcome["held"]
+        else None,
+        **trajectory,
+        "two_finger_contact_fraction": two_finger_samples / len(rows),
+        "contact_count_mismatch_fraction": contact_mismatches / len(rows),
+    }
+
+
+def _outcome(rows: list[dict]) -> dict:
+    """The task result: did the gripper hold, and how far did the spatula slide.
+
+    Contact is lost and regained throughout normal slipping, so the reported
+    loss is the start of the run of lost samples that reaches the end -- the
+    one the gripper never recovered from. Slip is measured only while held and
+    is projected onto the initial handle direction, so it stays about sliding
+    through the fingers rather than about the spatula's own rotation.
+    """
+    contacts = [float(row["spatula_contacts"]) for row in rows]
+    held = contacts[-1] > 0.0
+    loss_time = None
+    if not held:
+        for row, count in zip(reversed(rows), reversed(contacts)):
+            if count > 0.0:
+                break
+            loss_time = float(row["time_s"])
+    start = _vector(rows[0], ("x_m", "y_m", "z_m"))
+    axis = _vector(rows[0], ("handle_axis_x", "handle_axis_y", "handle_axis_z"))
+    slip = 0.0
+    for row, count in zip(rows, contacts):
+        if count == 0.0:
+            break
+        offset = _subtract(start, _vector(row, ("x_m", "y_m", "z_m")))
+        slip = max(slip, sum(a * b for a, b in zip(offset, axis, strict=True)))
+    fragments = [
+        (
+            int(float(row[f"{side}_num_components"])),
+            float(row[f"{side}_largest_component_area_fraction"]),
+        )
+        for row in rows
+        for side in ("left", "right")
+        if float(row[f"{side}_num_components"]) > 0.0
+    ]
+    sap = [int(float(row["sap_iters"])) for row in rows]
+    line_search = [int(float(row["sap_line_search_iters"])) for row in rows]
+    return {
+        "held": held,
+        "first_contact_loss_time_s": loss_time,
+        "handle_axis_slip_m": slip,
+        "max_num_components": max((n for n, _ in fragments), default=0),
+        "min_largest_component_area_fraction": min(
+            (f for _, f in fragments), default=0.0
+        ),
+        "mean_sap_iters": sum(sap) / len(sap),
+        "max_sap_iters": max(sap),
+        "max_sap_line_search_iters": max(line_search),
+        "sap_nonconverged_samples": sum(
+            int(row["sap_converged"] == "false") for row in rows
+        ),
     }
 
 
@@ -389,6 +489,125 @@ def _write_csv(path: pathlib.Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _run_grip_sweep(
+    binary: pathlib.Path,
+    args: argparse.Namespace,
+    tiers: tuple[Tier, ...],
+    forces: list[float],
+) -> int:
+    """Finds the grip each representation needs to hold the spatula.
+
+    The refinement study answers "how wrong is the trajectory"; this answers
+    "did the task succeed", which is the question a manipulation scene is
+    actually posed to ask. The two are not interchangeable: the baseline grip
+    is marginal, so a representation that transmits less tangential force
+    drops the object outright and its trajectory error stops meaning anything.
+    """
+    cases = [
+        Case(
+            f"grip__{tier.name}__{representation}__f_{_label(force)}n",
+            tier.name,
+            representation,
+            tier.scale,
+            gripper_force=force,
+        )
+        for tier in tiers
+        for representation in REPRESENTATIONS
+        for force in forces
+    ]
+    print(
+        f"Running {len(cases)} grip-sweep simulations, jobs<={args.jobs}; "
+        f"forces={', '.join(f'{force:g}' for force in forces)} N; tiers="
+        + ", ".join(f"{tier.name}:{tier.scale:g}" for tier in tiers)
+    )
+    rows = []
+    failures = 0
+
+    def run(case: Case) -> dict | None:
+        try:
+            csv_path, timing = _run_case(
+                binary,
+                args.output_dir,
+                case,
+                args.duration,
+                args.time_step,
+                args.sample_period,
+                args.reuse_existing,
+            )
+        except (OSError, RuntimeError) as error:
+            print(f"FAILED {case.label}: {error}", file=sys.stderr)
+            return None
+        outcome = _outcome(_read_trajectory(csv_path))
+        return {
+            "tier": case.tier,
+            "representation": case.representation,
+            "resolution_scale": case.scale,
+            "gripper_force_n": case.gripper_force,
+            **outcome,
+            # Wall time is recorded but flagged, because a sweep run wide is
+            # not a cost measurement. The refinement study is the cost data.
+            "wall_time_s": timing["wall_s"],
+            "timing_valid": args.jobs == 1,
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for row in pool.map(run, cases):
+            if row is None:
+                failures += 1
+                continue
+            print(
+                f"{'HELD  ' if row['held'] else 'DROPPED'} "
+                f"{row['tier']:6s} {row['representation']:15s} "
+                f"f={row['gripper_force_n']:4g} N  "
+                f"slip={row['handle_axis_slip_m']:.4f} m  "
+                f"comp={row['max_num_components']}"
+            )
+            rows.append(row)
+    if not rows:
+        print("No grip-sweep run produced a trajectory", file=sys.stderr)
+        return 1
+    rows.sort(
+        key=lambda row: (
+            row["tier"],
+            row["representation"],
+            row["gripper_force_n"],
+        )
+    )
+    _write_csv(args.output_dir / "grip_sweep.csv", rows)
+    print(f"Wrote {len(rows)} rows to {args.output_dir / 'grip_sweep.csv'}")
+    _report_thresholds(rows)
+    return 1 if failures else 0
+
+
+def _report_thresholds(rows: list[dict]) -> None:
+    """The lowest swept force at which each case held, and where it failed."""
+    print("\nGrip threshold (lowest swept force that held):")
+    keys = sorted({(row["tier"], row["representation"]) for row in rows})
+    for tier, representation in keys:
+        group = sorted(
+            (
+                row
+                for row in rows
+                if row["tier"] == tier
+                and row["representation"] == representation
+            ),
+            key=lambda row: row["gripper_force_n"],
+        )
+        held = [row["gripper_force_n"] for row in group if row["held"]]
+        highest_dropped = [
+            row["gripper_force_n"] for row in group if not row["held"]
+        ]
+        # A threshold is only bracketed if some swept force failed below it;
+        # otherwise the sweep never found the boundary and says so.
+        threshold = f"{min(held):g} N" if held else "above every swept force"
+        bracket = (
+            f" (highest failure {max(highest_dropped):g} N)"
+            if highest_dropped
+            else " (never failed in this sweep)"
+        )
+        print(f"  {tier:6s} {representation:15s} {threshold}{bracket}")
 
 
 def main() -> int:
@@ -416,15 +635,48 @@ def main() -> int:
         help="Subset of the fixed tiers to run; arbitrary scales are not accepted.",
     )
     parser.add_argument("--reuse-existing", action="store_true")
+    parser.add_argument(
+        "--gripper-forces",
+        default="",
+        help="Comma-separated finger forces in N. Given, the run becomes a "
+        "grip-threshold sweep instead of a refinement study: each tier and "
+        "representation is run at every force and only the task outcome is "
+        "reported. Trajectory error is not, because a different grip is a "
+        "different trajectory and comparing it to the baseline reference "
+        "would measure the force change rather than the representation.",
+    )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Concurrent simulations. The refinement study stays at 1 because "
+        "its wall times are the cost data for the paper and a contended time "
+        "is not a measurement. The grip sweep reports pass or fail, so it can "
+        "be run wide.",
+    )
     args = parser.parse_args()
 
     binary = args.binary.resolve()
     if not binary.is_file():
         parser.error(f"binary does not exist: {binary}")
-    if args.duration <= 0.0 or args.time_step <= 0.0 or args.sample_period <= 0.0:
+    if (
+        args.duration <= 0.0
+        or args.time_step <= 0.0
+        or args.sample_period <= 0.0
+    ):
         parser.error("duration and time/sample steps must be positive")
     selected_tiers = tuple(tier for tier in TIERS if tier.name in args.tiers)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if args.gripper_forces:
+        forces = [float(value) for value in args.gripper_forces.split(",")]
+        if any(force <= 0.0 for force in forces):
+            parser.error("gripper forces must be positive")
+        return _run_grip_sweep(binary, args, selected_tiers, forces)
+    if args.jobs != 1:
+        parser.error(
+            "the refinement study is serial; --jobs applies to the "
+            "grip sweep only"
+        )
 
     reference = Case(
         "fine_tet_reference",
@@ -484,7 +736,9 @@ def main() -> int:
         )
         if not case.is_reference:
             metrics.append(
-                _compare(case, _read_trajectory(paths[case.label]), reference_rows)
+                _compare(
+                    case, _read_trajectory(paths[case.label]), reference_rows
+                )
             )
 
     tier_rows = []
@@ -498,7 +752,9 @@ def main() -> int:
                 "ellipsoid_resolution_m": 0.04 * tier.scale,
                 "cylinder_resolution_m": 0.005 * tier.scale,
                 "wall_time_sum_s": sum(row["wall_time_s"] for row in tier_runs),
-                "peak_rss_max_mib": max(row["peak_rss_mib"] for row in tier_runs),
+                "peak_rss_max_mib": max(
+                    row["peak_rss_mib"] for row in tier_runs
+                ),
                 "static_mc_force_floor_margin_x": tier.static_floor_margin,
                 "measured_min_force_floor_margin_x": min(
                     row["force_floor_margin_x"] for row in tier_metrics
@@ -514,7 +770,9 @@ def main() -> int:
                     row["contact_count_mismatch_fraction"]
                     for row in tier_metrics
                 ),
-                "floor_limited": any(row["floor_limited"] for row in tier_metrics),
+                "floor_limited": any(
+                    row["floor_limited"] for row in tier_metrics
+                ),
             }
         )
 
@@ -522,7 +780,8 @@ def main() -> int:
     _write_csv(args.output_dir / "trajectory_metrics.csv", metrics)
     _write_csv(args.output_dir / "tier_summary.csv", tier_rows)
     reference_margin = (
-        FINEST_STATIC_MC_FORCE_ERROR * (REFERENCE_SCALE / 0.25) ** 2
+        FINEST_STATIC_MC_FORCE_ERROR
+        * (REFERENCE_SCALE / 0.25) ** 2
         / FORCE_PRACTICAL_LIMIT
     )
     reference_timing = timing[reference.label]
