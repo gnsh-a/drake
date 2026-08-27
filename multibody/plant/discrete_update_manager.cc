@@ -45,6 +45,18 @@ enum class HydroNormalExperimentMode {
   kCoupledGradient,
 };
 
+enum class HydroNormalAzimuthMode {
+  // Sample a uniformly random tangent direction, as in the original
+  // experiment.
+  kIsotropic,
+  // Preserve the isotropic experiment's tilt-magnitude distribution, but
+  // direct every tilt toward the projection of the selected world axis into
+  // the original normal's tangent plane.
+  kWorldX,
+  kWorldY,
+  kWorldZ,
+};
+
 // Experiment-only controls for studying SAP sensitivity to noisy hydroelastic
 // contact normals. Disabled unless DRAKE_HYDRO_NORMAL_EXPERIMENT=gaussian.
 struct HydroNormalExperimentSettings {
@@ -58,6 +70,7 @@ struct HydroNormalExperimentSettings {
   // Hard angular cap to avoid rare Gaussian outliers.
   double max_angle_rad{3.0 * M_PI / 180.0};
   HydroNormalExperimentMode mode{HydroNormalExperimentMode::kFrameOnly};
+  HydroNormalAzimuthMode azimuth_mode{HydroNormalAzimuthMode::kIsotropic};
 };
 
 double DegreesToRadians(double degrees) {
@@ -113,6 +126,22 @@ GetHydroNormalExperimentSettings() {
           "'coupled_gradient'.");
     }
   }
+  if (const char* azimuth =
+          std::getenv("DRAKE_HYDRO_NORMAL_AZIMUTH")) {
+    if (azimuth == std::string("isotropic")) {
+      settings.azimuth_mode = HydroNormalAzimuthMode::kIsotropic;
+    } else if (azimuth == std::string("world_x")) {
+      settings.azimuth_mode = HydroNormalAzimuthMode::kWorldX;
+    } else if (azimuth == std::string("world_y")) {
+      settings.azimuth_mode = HydroNormalAzimuthMode::kWorldY;
+    } else if (azimuth == std::string("world_z")) {
+      settings.azimuth_mode = HydroNormalAzimuthMode::kWorldZ;
+    } else {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_NORMAL_AZIMUTH must be 'isotropic', 'world_x', "
+          "'world_y', or 'world_z'.");
+    }
+  }
   return settings;
 }
 
@@ -154,8 +183,44 @@ Vector3<double> PerturbHydroNormal(
                                     : Vector3<double>::UnitX();
   const Vector3<double> t1 = nhat_BA_W.cross(reference).normalized();
   const Vector3<double> t2 = nhat_BA_W.cross(t1).normalized();
-  Vector3<double> noisy =
-      (nhat_BA_W + gaussian(rng) * t1 + gaussian(rng) * t2).normalized();
+  Vector3<double> noisy;
+  if (settings.azimuth_mode == HydroNormalAzimuthMode::kIsotropic) {
+    noisy =
+        (nhat_BA_W + gaussian(rng) * t1 + gaussian(rng) * t2).normalized();
+  } else {
+    Vector3<double> bias_axis_W = Vector3<double>::UnitX();
+    switch (settings.azimuth_mode) {
+      case HydroNormalAzimuthMode::kWorldX:
+        bias_axis_W = Vector3<double>::UnitX();
+        break;
+      case HydroNormalAzimuthMode::kWorldY:
+        bias_axis_W = Vector3<double>::UnitY();
+        break;
+      case HydroNormalAzimuthMode::kWorldZ:
+        bias_axis_W = Vector3<double>::UnitZ();
+        break;
+      case HydroNormalAzimuthMode::kIsotropic:
+        break;
+    }
+    Vector3<double> bias_tangent_W =
+        bias_axis_W - bias_axis_W.dot(nhat_BA_W) * nhat_BA_W;
+    if (bias_tangent_W.squaredNorm() <= 1.0e-24) {
+      throw std::runtime_error(
+          "DRAKE_HYDRO_NORMAL_AZIMUTH world axis is parallel to a contact "
+          "normal; its tangent tilt direction is undefined.");
+    }
+    bias_tangent_W.normalize();
+
+    // The norm of two independent Gaussian samples is Rayleigh distributed.
+    // Reusing that norm preserves the original experiment's per-face angular
+    // distribution while making its azimuth coherent across the surface.
+    const double tangent_noise_1 = gaussian(rng);
+    const double tangent_noise_2 = gaussian(rng);
+    const double tangent_magnitude =
+        std::hypot(tangent_noise_1, tangent_noise_2);
+    noisy =
+        (nhat_BA_W + tangent_magnitude * bias_tangent_W).normalized();
+  }
 
   const double cos_angle =
       std::clamp(nhat_BA_W.dot(noisy), -1.0, 1.0);
