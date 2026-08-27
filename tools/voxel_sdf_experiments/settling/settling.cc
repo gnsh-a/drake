@@ -18,19 +18,25 @@
 
 #include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/query_results/contact_surface.h"
+#include "drake/geometry/render/render_camera.h"
+#include "drake/geometry/render_vtk/factory.h"
 #include "drake/geometry/shape_specification.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/math/roll_pitch_yaw.h"
+#include "drake/math/rotation_matrix.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver_statistics.h"
 #include "drake/multibody/math/spatial_algebra.h"
 #include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/coulomb_friction.h"
 #include "drake/multibody/plant/multibody_plant.h"
+#include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/spatial_inertia.h"
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/context.h"
 #include "drake/systems/framework/diagram_builder.h"
 #include "drake/systems/framework/event_status.h"
+#include "drake/systems/sensors/image_writer.h"
+#include "drake/systems/sensors/rgbd_sensor.h"
 #include "drake/tools/voxel_sdf_experiments/common/components.h"
 #include "drake/tools/voxel_sdf_experiments/common/emit.h"
 #include "drake/tools/voxel_sdf_experiments/common/mesh_export.h"
@@ -46,14 +52,19 @@ using Eigen::Vector3d;
 using geometry::Box;
 using geometry::ContactSurface;
 using geometry::ProximityProperties;
+using geometry::RenderEngineVtkParams;
 using geometry::Sphere;
+using geometry::render::ColorRenderCamera;
+using geometry::render::DepthRenderCamera;
 using math::RigidTransformd;
+using math::RotationMatrixd;
 using multibody::AddMultibodyPlantSceneGraph;
 using multibody::ContactModel;
 using multibody::ContactResults;
 using multibody::CoulombFriction;
 using multibody::DiscreteContactApproximation;
 using multibody::MultibodyPlant;
+using multibody::PrismaticJoint;
 using multibody::RigidBody;
 using multibody::SpatialInertia;
 using multibody::SpatialVelocity;
@@ -62,6 +73,9 @@ using systems::Context;
 using systems::DiagramBuilder;
 using systems::EventStatus;
 using systems::Simulator;
+using systems::sensors::ImageRgba8U;
+using systems::sensors::RgbdSensor;
+using systems::sensors::SaveToPng;
 
 constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr double kGravity = 9.81;
@@ -142,14 +156,29 @@ void ValidateConfig(const SettlingConfig& config) {
   }
   ThrowUnlessFinitePositive(config.settling_window_periods,
                             "settling_window_periods");
-  ThrowUnlessFiniteNonnegative(config.initial_gap, "initial_gap");
+  if (!(std::isfinite(config.initial_gap) &&
+        config.initial_gap > -2.0 * kRadius)) {
+    throw std::logic_error(
+        "initial_gap must be finite and greater than -2 * radius");
+  }
   ThrowUnlessFinitePositive(config.time_step, "time_step");
+  ThrowUnlessFinitePositive(config.frame_period, "frame_period");
   ThrowUnlessFiniteNonnegative(config.dissipation, "dissipation");
   ThrowUnlessFiniteNonnegative(config.duration, "duration");
   ThrowUnlessFiniteNonnegative(config.settling_window, "settling_window");
   if (!config.grid_rpy_deg.allFinite()) {
     throw std::logic_error("grid RPY angles must be finite");
   }
+}
+
+RigidTransformd MakeCameraPose() {
+  const Vector3d p_WC(0.52, -0.58, 0.38);
+  const Vector3d p_WT(0.0, 0.0, 0.05);
+  const Vector3d Cz_W = (p_WT - p_WC).normalized();
+  const Vector3d Cx_W = -Vector3d::UnitZ().cross(Cz_W).normalized();
+  const Vector3d Cy_W = Cz_W.cross(Cx_W).normalized();
+  return RigidTransformd(
+      RotationMatrixd::MakeFromOrthonormalColumns(Cx_W, Cy_W, Cz_W), p_WC);
 }
 
 ProximityProperties MakeContactProperties(const SettlingConfig& config) {
@@ -422,8 +451,8 @@ SettlingResult RunSettling(const SettlingConfig& config) {
   const SettlingDerived derived = CalcSettlingDerived(config);
 
   DiagramBuilder<double> builder;
-  MultibodyPlant<double>& plant =
-      AddMultibodyPlantSceneGraph(&builder, config.time_step).plant;
+  auto [plant, scene_graph] =
+      AddMultibodyPlantSceneGraph(&builder, config.time_step);
   plant.set_contact_model(ContactModel::kHydroelastic);
   plant.set_discrete_contact_approximation(
       DiscreteContactApproximation::kLagged);
@@ -437,6 +466,12 @@ SettlingResult RunSettling(const SettlingConfig& config) {
       SpatialInertia<double>::SolidSphereWithMass(config.mass, kRadius);
   const RigidBody<double>& free_body =
       plant.AddRigidBody("free_sphere", free_inertia);
+  const PrismaticJoint<double>* axial_joint = nullptr;
+  if (config.axial_only) {
+    axial_joint = &plant.AddJoint<PrismaticJoint>(
+        "axial_translation", plant.world_body(), std::nullopt, free_body,
+        std::nullopt, Vector3d::UnitZ());
+  }
   const math::RollPitchYawd grid_rpy(
       kDegreesToRadians * config.grid_rpy_deg.x(),
       kDegreesToRadians * config.grid_rpy_deg.y(),
@@ -447,20 +482,53 @@ SettlingResult RunSettling(const SettlingConfig& config) {
   // lower GeometryId makes its body-fixed grid the traversed host grid.
   plant.RegisterCollisionGeometry(free_body, X_BG, sphere, "free_sphere",
                                   MakeContactProperties(config));
+  plant.RegisterVisualGeometry(free_body, X_BG, sphere, "free_sphere_visual",
+                               Eigen::Vector4d(0.20, 0.48, 0.88, 0.65));
   if (config.scene == SettlingScene::kSphereSphere) {
     plant.RegisterCollisionGeometry(plant.world_body(), RigidTransformd(),
                                     sphere, "anchored_sphere",
                                     MakeContactProperties(config));
+    plant.RegisterVisualGeometry(plant.world_body(), RigidTransformd(), sphere,
+                                 "anchored_sphere_visual",
+                                 Eigen::Vector4d(0.72, 0.75, 0.80, 0.45));
   } else {
     const Box box(2.0 * kBoxHalfWidths.x(), 2.0 * kBoxHalfWidths.y(),
                   2.0 * kBoxHalfWidths.z());
     plant.RegisterCollisionGeometry(plant.world_body(), RigidTransformd(), box,
                                     "anchored_box",
                                     MakeContactProperties(config));
+    plant.RegisterVisualGeometry(plant.world_body(), RigidTransformd(), box,
+                                 "anchored_box_visual",
+                                 Eigen::Vector4d(0.72, 0.75, 0.80, 0.45));
   }
   plant.Finalize();
-  if (plant.num_positions() != 7 || plant.num_velocities() != 6) {
-    throw std::runtime_error("The settling sphere must retain all six DOF");
+  if (config.axial_only) {
+    if (plant.num_positions() != 1 || plant.num_velocities() != 1) {
+      throw std::runtime_error(
+          "Axial settling must have exactly one position and velocity");
+    }
+  } else if (plant.num_positions() != 7 || plant.num_velocities() != 6) {
+    throw std::runtime_error("Free settling must retain all six DOF");
+  }
+
+  const RgbdSensor* camera{};
+  if (!config.frames_dir.empty()) {
+    constexpr std::string_view kRendererName = "settling_video_renderer";
+    RenderEngineVtkParams renderer_params;
+    renderer_params.default_clear_color = Vector3d::Ones();
+    scene_graph.AddRenderer(std::string(kRendererName),
+                            geometry::MakeRenderEngineVtk(renderer_params));
+    const ColorRenderCamera color_camera{{std::string(kRendererName),
+                                          {512, 512, 7.0 * kPi / 30.0},
+                                          {0.05, 3.0},
+                                          {}},
+                                         false};
+    const DepthRenderCamera depth_camera{color_camera.core(), {0.05, 3.0}};
+    camera = builder.AddSystem<RgbdSensor>(scene_graph.world_frame_id(),
+                                           MakeCameraPose(), color_camera,
+                                           depth_camera);
+    builder.Connect(scene_graph.get_query_output_port(),
+                    camera->query_object_input_port());
   }
 
   std::unique_ptr<systems::Diagram<double>> diagram = builder.Build();
@@ -468,11 +536,16 @@ SettlingResult RunSettling(const SettlingConfig& config) {
       diagram->CreateDefaultContext();
   Context<double>& plant_context =
       diagram->GetMutableSubsystemContext(plant, diagram_context.get());
-  plant.SetFreeBodyPose(
-      &plant_context, free_body,
-      RigidTransformd(Vector3d(0.0, 0.0, 2.0 * kRadius + config.initial_gap)));
-  plant.SetFreeBodySpatialVelocity(&plant_context, free_body,
-                                   SpatialVelocity<double>::Zero());
+  const double initial_height = 2.0 * kRadius + config.initial_gap;
+  if (axial_joint != nullptr) {
+    axial_joint->set_translation(&plant_context, initial_height);
+    axial_joint->set_translation_rate(&plant_context, 0.0);
+  } else {
+    plant.SetFreeBodyPose(&plant_context, free_body,
+                          RigidTransformd(Vector3d(0.0, 0.0, initial_height)));
+    plant.SetFreeBodySpatialVelocity(&plant_context, free_body,
+                                     SpatialVelocity<double>::Zero());
+  }
 
   TrajectoryWriter trajectory_writer(config.trajectory);
   SettledAccumulator settled;
@@ -480,10 +553,15 @@ SettlingResult RunSettling(const SettlingConfig& config) {
   std::optional<double> first_contact_loss_time;
   double max_penetration = 0.0;
   const double settled_start = derived.duration - derived.settling_window;
+  if (!config.frames_dir.empty()) {
+    std::filesystem::create_directories(config.frames_dir);
+    std::filesystem::create_directories(config.frames_dir / "contact_surfaces");
+  }
 
   Simulator<double> simulator(*diagram, std::move(diagram_context));
   simulator.set_target_realtime_rate(0.0);
   int64_t monitor_calls = 0;
+  int frame_index = 0;
   simulator.set_monitor([&](const Context<double>& root_context) {
     const bool write_trajectory =
         !config.trajectory.empty() &&
@@ -496,6 +574,9 @@ SettlingResult RunSettling(const SettlingConfig& config) {
         free_body.EvalSpatialVelocityInWorld(current_plant_context);
     Sample sample;
     sample.time = root_context.get_time();
+    const bool write_frame =
+        camera != nullptr && sample.time + 0.5 * config.time_step >=
+                                 frame_index * config.frame_period;
     sample.penetration = 2.0 * kRadius - X_WB.translation().z();
     sample.axial_velocity = V_WB.translational().z();
     sample.lateral_offset = X_WB.translation().head<2>().norm();
@@ -538,7 +619,7 @@ SettlingResult RunSettling(const SettlingConfig& config) {
         throw std::runtime_error(
             "Contact surface type did not match the representation");
       }
-      if (in_settled_window || write_trajectory) {
+      if (in_settled_window || write_trajectory || write_frame) {
         const SurfaceView view = MakeSurfaceView(surface);
         sample.faces = view.faces.size();
         for (const Face& face : view.faces) sample.contact_area += face.area;
@@ -547,6 +628,14 @@ SettlingResult RunSettling(const SettlingConfig& config) {
         sample.largest_component_area_fraction =
             components.largest_area_fraction;
         sample.num_components = components.num_components;
+        if (write_frame) {
+          WriteSurfaceVtk(
+              config.frames_dir / "contact_surfaces" /
+                  fmt::format("frame_{:04d}.vtk", frame_index),
+              view,
+              fmt::format("{} settling contact t={}",
+                          to_string(config.representation), sample.time));
+        }
       }
     }
 
@@ -559,6 +648,16 @@ SettlingResult RunSettling(const SettlingConfig& config) {
     max_penetration = std::max(max_penetration, sample.penetration);
     if (in_settled_window) settled.Add(sample);
     if (write_trajectory) trajectory_writer.Write(sample);
+    if (write_frame) {
+      const Context<double>& camera_context =
+          camera->GetMyContextFromRoot(root_context);
+      const ImageRgba8U& image =
+          camera->color_image_output_port().Eval<ImageRgba8U>(camera_context);
+      SaveToPng(image, (config.frames_dir /
+                        fmt::format("frame_{:04d}.png", frame_index))
+                           .string());
+      ++frame_index;
+    }
     return EventStatus::Succeeded();
   });
 

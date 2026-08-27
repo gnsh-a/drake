@@ -34,7 +34,12 @@ struct SettlingConfig {
   double voxel_width{0.01};
   double tet_resolution_hint{0.01};
   double hydroelastic_modulus{1.0e5};
+  /* Positive starts above contact; negative starts at the corresponding
+   penetration. */
   double initial_gap{0.001};
+  /* Constrain the moving sphere to world-z translation. This isolates the
+   axial force equilibrium from the sphere-on-sphere lateral instability. */
+  bool axial_only{false};
   double time_step{1.0e-4};
   double dissipation{3.0};
   double duration{0.0};
@@ -55,6 +60,10 @@ struct SettlingConfig {
   std::filesystem::path output;
   std::filesystem::path trajectory;
   std::filesystem::path mesh_output;
+  /* Optional directory for color frames rendered by Drake during the actual
+   * simulation. Empty disables rendering. */
+  std::filesystem::path frames_dir;
+  double frame_period{0.01};
 };
 
 struct SettlingDerived {

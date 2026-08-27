@@ -20,7 +20,11 @@ DEFINE_double(tet_resolution_hint, 0.01,
               "Tet hydroelastic resolution hint in meters.");
 DEFINE_double(hydroelastic_modulus, 1.0e5,
               "Hydroelastic modulus for both bodies in pascals.");
-DEFINE_double(initial_gap, 0.001, "Initial gap above touching in meters.");
+DEFINE_double(initial_gap, 0.001,
+              "Initial gap above touching in meters; a negative value starts "
+              "at the corresponding penetration.");
+DEFINE_bool(axial_only, false,
+            "Constrain the moving sphere to world-z translation only.");
 DEFINE_double(time_step, 1.0e-4, "Discrete plant time step in seconds.");
 DEFINE_double(dissipation, 3.0, "Hunt-Crossley dissipation in seconds/meter.");
 DEFINE_double(duration, 0.0,
@@ -52,6 +56,11 @@ DEFINE_int32(trajectory_stride, 1,
              "against each other must share this and --time_step.");
 DEFINE_string(mesh_output, "",
               "Optional settled contact-surface VTK POLYDATA path.");
+DEFINE_string(frames_dir, "",
+              "Directory for Drake-rendered PNG frames; empty disables "
+              "rendering.");
+DEFINE_double(frame_period, 0.01,
+              "Simulation-time interval between rendered frames in seconds.");
 
 namespace drake {
 namespace tools {
@@ -72,6 +81,7 @@ int DoMain(bool mass_was_set) {
   config.voxel_width = FLAGS_voxel_width;
   config.tet_resolution_hint = FLAGS_tet_resolution_hint;
   config.initial_gap = FLAGS_initial_gap;
+  config.axial_only = FLAGS_axial_only;
   config.time_step = FLAGS_time_step;
   config.dissipation = FLAGS_dissipation;
   config.duration = FLAGS_duration;
@@ -84,6 +94,8 @@ int DoMain(bool mass_was_set) {
   config.trajectory = std::filesystem::path(FLAGS_trajectory);
   config.trajectory_stride = FLAGS_trajectory_stride;
   config.mesh_output = std::filesystem::path(FLAGS_mesh_output);
+  config.frames_dir = std::filesystem::path(FLAGS_frames_dir);
+  config.frame_period = FLAGS_frame_period;
 
   const SettlingResult result = RunSettling(config);
   std::cout << "wrote " << FLAGS_output << ": scene=" << to_string(config.scene)
