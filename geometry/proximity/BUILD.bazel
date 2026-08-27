@@ -506,6 +506,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":contact_surface_utility",
@@ -524,6 +525,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":contact_surface_utility",
@@ -544,6 +546,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":contact_surface_utility",
@@ -565,6 +568,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":voxel_sdf_shape",
@@ -1548,6 +1552,16 @@ drake_cc_googletest(
         "//common/test_utilities:eigen_matrix_compare",
         "//geometry:proximity_engine",
         "//geometry:proximity_properties",
+        "//geometry:shape_specification",
+        "//math:geometric_transform",
+    ],
+)
+
+drake_cc_googletest(
+    name = "voxel_sdf_contact_common_test",
+    srcs = ["test/voxel_sdf_contact_common_test.cc"],
+    deps = [
+        ":voxel_sdf_contact_common",
         "//geometry:shape_specification",
         "//math:geometric_transform",
     ],

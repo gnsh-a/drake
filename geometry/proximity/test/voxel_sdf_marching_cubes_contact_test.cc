@@ -15,8 +15,10 @@
 
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/geometry/proximity/marching_cubes_table.h"
+#include "drake/geometry/proximity/voxel_sdf_contact_common.h"
 #include "drake/geometry/shape_specification.h"
 #include "drake/math/rigid_transform.h"
+#include "drake/math/rotation_matrix.h"
 
 namespace drake {
 namespace geometry {
@@ -84,6 +86,63 @@ void ExpectValidMarchingCubesSurface(const ContactSurface<double>& surface) {
     EXPECT_TRUE(grad_M_W.allFinite());
     EXPECT_TRUE(grad_N_W.allFinite());
     EXPECT_GT(mesh.face_normal(f).dot(grad_M_W - grad_N_W), 0.0);
+  }
+}
+
+void ExpectBroadphaseMatchesFullTraversal(const VoxelSdfGeometry& A,
+                                          const math::RigidTransformd& X_WA,
+                                          GeometryId id_A,
+                                          const VoxelSdfGeometry& B,
+                                          const math::RigidTransformd& X_WB,
+                                          GeometryId id_B,
+                                          bool expect_bit_exact = true) {
+  const auto broadphase =
+      CalcVoxelSdfMarchingCubesContact(A, X_WA, id_A, B, X_WB, id_B);
+  const auto exhaustive = CalcVoxelSdfMarchingCubesContactOverRange(
+      A, X_WA, id_A, B, X_WB, id_B,
+      MakeFullVoxelSdfIndexRange(A, VoxelSdfTraversalGrid::kMarchingCubes));
+  ASSERT_EQ(broadphase == nullptr, exhaustive == nullptr);
+  if (broadphase == nullptr) return;
+  const VoxelSdfIndexRange candidate = CalcVoxelSdfCandidateRange(
+      A, B, X_WA.InvertAndCompose(X_WB), VoxelSdfTraversalGrid::kMarchingCubes);
+  ASSERT_EQ(broadphase->num_vertices(), exhaustive->num_vertices())
+      << "candidate begin=" << candidate.begin.x() << "," << candidate.begin.y()
+      << "," << candidate.begin.z() << " end=" << candidate.end.x() << ","
+      << candidate.end.y() << "," << candidate.end.z();
+  ASSERT_EQ(broadphase->num_faces(), exhaustive->num_faces());
+  for (int f = 0; f < broadphase->num_faces(); ++f) {
+    const SurfaceTriangle& actual = broadphase->tri_mesh_W().element(f);
+    const SurfaceTriangle& expected = exhaustive->tri_mesh_W().element(f);
+    EXPECT_EQ(actual.vertex(0), expected.vertex(0));
+    EXPECT_EQ(actual.vertex(1), expected.vertex(1));
+    EXPECT_EQ(actual.vertex(2), expected.vertex(2));
+  }
+  // Repeated FCL Ellipsoid queries are not bit-repeatable. Face topology and
+  // counts remain exact; these bounds cover the observed evaluator jitter.
+  const double geometry_tolerance = expect_bit_exact ? 1e-13 : 1e-7;
+  const double field_relative_tolerance = expect_bit_exact ? 1e-12 : 1e-6;
+  for (int v = 0; v < broadphase->num_vertices(); ++v) {
+    EXPECT_TRUE(CompareMatrices(broadphase->tri_mesh_W().vertex(v),
+                                exhaustive->tri_mesh_W().vertex(v),
+                                geometry_tolerance));
+    const double actual = broadphase->tri_e_MN().EvaluateAtVertex(v);
+    const double expected = exhaustive->tri_e_MN().EvaluateAtVertex(v);
+    const double tolerance =
+        field_relative_tolerance *
+        std::max({1.0, std::abs(actual), std::abs(expected)});
+    EXPECT_NEAR(actual, expected, tolerance);
+  }
+  if (expect_bit_exact) {
+    EXPECT_TRUE(broadphase->Equal(*exhaustive));
+  }
+  const double gradient_tolerance = expect_bit_exact ? 1e-12 : 1e-5;
+  for (int f = 0; f < broadphase->num_faces(); ++f) {
+    EXPECT_TRUE(CompareMatrices(broadphase->EvaluateGradE_M_W(f),
+                                exhaustive->EvaluateGradE_M_W(f),
+                                gradient_tolerance));
+    EXPECT_TRUE(CompareMatrices(broadphase->EvaluateGradE_N_W(f),
+                                exhaustive->EvaluateGradE_N_W(f),
+                                gradient_tolerance));
   }
 }
 
@@ -457,6 +516,82 @@ GTEST_TEST(VoxelSdfMarchingCubesContactTest,
   EXPECT_TRUE(has_zero_pressure);
   EXPECT_NEAR(surface->tri_mesh_W().total_area(), exact_area,
               0.02 * exact_area);
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           SphereBoxBroadphaseMatchesFullTraversal) {
+  constexpr double kRadius = 0.1;
+  constexpr double kPenetration = 0.0199;
+  const GeometryId id_sphere = GeometryId::get_new_id();
+  const GeometryId id_box = GeometryId::get_new_id();
+  const math::RigidTransformd X_WS(
+      Vector3d(0.0, 0.0, 2.0 * kRadius - kPenetration));
+  const math::RigidTransformd X_WB;
+  for (const double voxel_width : {0.01, 0.008, 0.005, 0.0025}) {
+    SCOPED_TRACE(voxel_width);
+    const VoxelSdfGeometry sphere(Sphere(kRadius), voxel_width, 1.0e8,
+                                  VoxelSdfEvaluationMode::kPrimitiveSdf,
+                                  VoxelSdfExtractionMethod::kMarchingCubes);
+    const VoxelSdfGeometry box(Box(0.4, 0.4, 0.2), voxel_width, 1.0e8,
+                               VoxelSdfEvaluationMode::kPrimitiveSdf,
+                               VoxelSdfExtractionMethod::kMarchingCubes);
+    ExpectBroadphaseMatchesFullTraversal(sphere, X_WS, id_sphere, box, X_WB,
+                                         id_box);
+  }
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           EllipsoidBoxBroadphaseMatchesFullTraversal) {
+  const VoxelSdfGeometry ellipsoid(Ellipsoid(1.0, 0.8, 0.6), 0.2, 125.0,
+                                   VoxelSdfEvaluationMode::kPrimitiveSdf,
+                                   VoxelSdfExtractionMethod::kMarchingCubes);
+  const VoxelSdfGeometry box(Box(4.0, 4.0, 1.0), 0.2, 100.0,
+                             VoxelSdfEvaluationMode::kPrimitiveSdf,
+                             VoxelSdfExtractionMethod::kMarchingCubes);
+  ExpectBroadphaseMatchesFullTraversal(
+      ellipsoid, math::RigidTransformd(Vector3d(0.0, 0.0, 1.0)),
+      GeometryId::get_new_id(), box, math::RigidTransformd(),
+      GeometryId::get_new_id(), false);
+}
+
+GTEST_TEST(VoxelSdfMarchingCubesContactTest,
+           RotatedPrimitiveBroadphaseMatchesFullTraversal) {
+  const VoxelSdfGeometry host_sphere(Sphere(1.0), 0.2, 150.0,
+                                     VoxelSdfEvaluationMode::kPrimitiveSdf,
+                                     VoxelSdfExtractionMethod::kMarchingCubes);
+  const VoxelSdfGeometry other_cylinder(
+      Cylinder(1.0, 1.6), 0.4, 175.0, VoxelSdfEvaluationMode::kPrimitiveSdf,
+      VoxelSdfExtractionMethod::kMarchingCubes);
+  const VoxelSdfGeometry other_ellipsoid(
+      Ellipsoid(1.0, 0.8, 0.6), 0.4, 175.0,
+      VoxelSdfEvaluationMode::kPrimitiveSdf,
+      VoxelSdfExtractionMethod::kMarchingCubes);
+  const GeometryId id_A = GeometryId::get_new_id();
+  const GeometryId id_B = GeometryId::get_new_id();
+  for (const double angle : {0.0, 0.35, 0.75}) {
+    for (const Vector3d& translation :
+         {Vector3d(1.2, 0.1, 0.0), Vector3d(1.6, 0.2, 0.15),
+          Vector3d(3.0, 0.0, 0.0)}) {
+      SCOPED_TRACE(angle);
+      SCOPED_TRACE(translation.x());
+      SCOPED_TRACE(translation.y());
+      SCOPED_TRACE(translation.z());
+      const math::RigidTransformd X_WO(
+          math::RotationMatrixd::MakeYRotation(angle), translation);
+      {
+        SCOPED_TRACE("cylinder");
+        ExpectBroadphaseMatchesFullTraversal(host_sphere,
+                                             math::RigidTransformd(), id_A,
+                                             other_cylinder, X_WO, id_B);
+      }
+      {
+        SCOPED_TRACE("ellipsoid");
+        ExpectBroadphaseMatchesFullTraversal(
+            host_sphere, math::RigidTransformd(), id_A, other_ellipsoid, X_WO,
+            id_B, false);
+      }
+    }
+  }
 }
 
 }  // namespace
