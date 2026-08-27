@@ -6,7 +6,10 @@ package(default_visibility = ["//visibility:private"])
 
 models_filegroup(
     name = "glob_models",
-    glob_exclude = ["images/**/*"],
+    glob_exclude = [
+        "images/**/*",
+        "out/**/*",
+    ],
 )
 
 filegroup(
@@ -17,6 +20,14 @@ filegroup(
     visibility = [
         "//:__pkg__",
         "//bindings/pydrake/visualization:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "comparison_tools",
+    srcs = [
+        "benchmark_rtf.py",
+        "compare_trajectories.py",
     ],
 )
 
@@ -48,6 +59,7 @@ drake_cc_binary(
         "--simulation_sec=0.1",
         "--realtime_rate=0.0",
         "--validate_voxel_sdf_contacts",
+        "--visualize=false",
     ],
 )
 

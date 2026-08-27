@@ -1,6 +1,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -12,6 +17,7 @@
 #include "drake/common/eigen_types.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/scene_graph.h"
+#include "drake/multibody/math/spatial_algebra.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/contact_results.h"
 #include "drake/multibody/plant/multibody_plant_config_functions.h"
@@ -54,15 +60,29 @@ DEFINE_string(contact_approximation, "lagged",
 DEFINE_string(hydroelastic_representation, "tet",
               "Compliant hydroelastic representation. Options are: "
               "'tet' or 'voxel_sdf'.");
+DEFINE_double(tet_resolution_hint_scale, 1.0,
+              "Scale applied to every parsed tet resolution hint. Requires "
+              "--hydroelastic_representation=tet.");
+DEFINE_double(voxel_sdf_width_scale, 1.0,
+              "Scale applied to every parsed resolution hint when it becomes "
+              "a voxel width. Requires --hydroelastic_representation="
+              "voxel_sdf.");
 DEFINE_bool(validate_voxel_sdf_contacts, false,
             "Validate both voxel-SDF bubble contacts and their finite contact "
             "data. Requires --hydroelastic_representation=voxel_sdf.");
+DEFINE_string(trajectory_csv, "",
+              "Output CSV for the minimal spatula trajectory and per-finger "
+              "contact wrenches. Empty disables trajectory recording.");
+DEFINE_bool(report_simulation_timing, false,
+            "Report simulation-only wall time and realtime factor. Requires "
+            "--realtime_rate=0, --visualize=false, and no trajectory CSV.");
 
 // Simulator settings.
 DEFINE_double(realtime_rate, 1,
               "Desired rate of the simulation compared to realtime."
               "A value of 1 indicates real time.");
 DEFINE_double(simulation_sec, 30, "Number of seconds to simulate. [s].");
+DEFINE_bool(visualize, true, "Enable Meshcat visualization and recording.");
 // The following flags are only in effect in continuous mode.
 DEFINE_double(accuracy, 1.0e-3, "The integration accuracy.");
 DEFINE_double(max_time_step, 1.0e-2,
@@ -89,14 +109,60 @@ namespace examples {
 namespace spatula_slip_control {
 namespace {
 
-std::vector<geometry::GeometryId> SetVoxelSdfCompliantRepresentation(
+struct ContactGeometryIds {
+  geometry::GeometryId left_finger;
+  geometry::GeometryId right_finger;
+  geometry::GeometryId spatula;
+};
+
+struct TrajectorySample {
+  double time{};
+  Eigen::Vector3d position_W{Eigen::Vector3d::Zero()};
+  Eigen::Quaterniond quaternion_WB{Eigen::Quaterniond::Identity()};
+  double left_finger_position{};
+  double right_finger_position{};
+  int spatula_contacts{};
+  Eigen::Vector3d left_contact_force_W{Eigen::Vector3d::Zero()};
+  double left_handle_axis_torque{};
+  Eigen::Vector3d right_contact_force_W{Eigen::Vector3d::Zero()};
+  double right_handle_axis_torque{};
+};
+
+geometry::GeometryId GetOnlyCollisionGeometry(
+    const MultibodyPlant<double>& plant, const std::string& body_name,
+    ModelInstanceIndex model_instance) {
+  const auto& body = plant.GetBodyByName(body_name, model_instance);
+  const auto& geometry_ids = plant.GetCollisionGeometriesForBody(body);
+  if (geometry_ids.size() != 1) {
+    throw std::logic_error("Expected body '" + body_name +
+                           "' to have exactly one collision geometry");
+  }
+  return geometry_ids.front();
+}
+
+ContactGeometryIds FindContactGeometryIds(const MultibodyPlant<double>& plant,
+                                          ModelInstanceIndex gripper_instance,
+                                          ModelInstanceIndex spatula_instance) {
+  return ContactGeometryIds{
+      .left_finger = GetOnlyCollisionGeometry(plant, "left_finger_bubble",
+                                              gripper_instance),
+      .right_finger = GetOnlyCollisionGeometry(plant, "right_finger_bubble",
+                                               gripper_instance),
+      .spatula = GetOnlyCollisionGeometry(plant, "spatula", spatula_instance),
+  };
+}
+
+std::vector<geometry::GeometryId> UpdateCompliantGeometryProperties(
     const std::array<ModelInstanceIndex, 2>& model_instances,
+    double resolution_hint_scale, bool use_voxel_sdf,
     MultibodyPlant<double>* plant, SceneGraph<double>* scene_graph) {
   DRAKE_DEMAND(plant != nullptr);
   DRAKE_DEMAND(scene_graph != nullptr);
   DRAKE_DEMAND(plant->get_source_id().has_value());
+  DRAKE_DEMAND(resolution_hint_scale > 0.0 &&
+               std::isfinite(resolution_hint_scale));
 
-  std::vector<geometry::GeometryId> replaced_ids;
+  std::vector<geometry::GeometryId> updated_ids;
   for (ModelInstanceIndex model_instance : model_instances) {
     for (multibody::BodyIndex body_index :
          plant->GetBodyIndices(model_instance)) {
@@ -115,31 +181,42 @@ std::vector<geometry::GeometryId> SetVoxelSdfCompliantRepresentation(
           continue;
         }
 
-        // Preserve the parsed resolution hint (now used as voxel width),
-        // modulus, dissipation, and friction. Only the compliant
-        // representation and its evaluation mode change.
+        // Preserve the modulus, dissipation, and friction while scaling the
+        // parsed resolution hint.
+        const double old_resolution_hint = old_properties->GetProperty<double>(
+            geometry::internal::kHydroGroup, geometry::internal::kRezHint);
+        const double resolution_hint =
+            old_resolution_hint * resolution_hint_scale;
+        if (!(resolution_hint > 0.0 && std::isfinite(resolution_hint))) {
+          throw std::logic_error("The scaled resolution hint is invalid");
+        }
         geometry::ProximityProperties new_properties(*old_properties);
-        new_properties.UpdateProperty(
-            geometry::internal::kHydroGroup,
-            geometry::internal::kCompliantRepresentation,
-            std::string("voxel_sdf"));
-        new_properties.UpdateProperty(
-            geometry::internal::kHydroGroup,
-            geometry::internal::kVoxelSdfEvaluationMode,
-            geometry::VoxelSdfEvaluationMode::kPrimitiveAffine);
+        new_properties.UpdateProperty(geometry::internal::kHydroGroup,
+                                      geometry::internal::kRezHint,
+                                      resolution_hint);
+        if (use_voxel_sdf) {
+          new_properties.UpdateProperty(
+              geometry::internal::kHydroGroup,
+              geometry::internal::kCompliantRepresentation,
+              std::string("voxel_sdf"));
+          new_properties.UpdateProperty(
+              geometry::internal::kHydroGroup,
+              geometry::internal::kVoxelSdfEvaluationMode,
+              geometry::VoxelSdfEvaluationMode::kPrimitiveAffine);
+        }
         scene_graph->AssignRole(*plant->get_source_id(), geometry_id,
                                 new_properties, geometry::RoleAssign::kReplace);
-        replaced_ids.push_back(geometry_id);
+        updated_ids.push_back(geometry_id);
       }
     }
   }
 
-  if (replaced_ids.size() != 3) {
+  if (updated_ids.size() != 3) {
     throw std::logic_error(
-        "Expected to replace exactly two bubble Ellipsoids and one spatula "
-        "Cylinder with voxel SDF representations");
+        "Expected to update exactly two bubble Ellipsoids and one spatula "
+        "Cylinder");
   }
-  return replaced_ids;
+  return updated_ids;
 }
 
 void ValidateVoxelSdfContactResults(
@@ -202,6 +279,159 @@ void ValidateVoxelSdfContactResults(
       })) {
     throw std::runtime_error(
         "The two bubble contacts do not cover all three voxel geometries");
+  }
+}
+
+TrajectorySample MakeTrajectorySample(
+    const MultibodyPlant<double>& plant, const SceneGraph<double>& scene_graph,
+    const systems::Context<double>& plant_context,
+    const multibody::RigidBody<double>& spatula_body,
+    const PrismaticJoint<double>& left_joint,
+    const PrismaticJoint<double>& right_joint,
+    const ContactGeometryIds& geometry_ids,
+    const RigidTransform<double>& X_BH) {
+  TrajectorySample sample;
+  sample.time = plant_context.get_time();
+  const RigidTransform<double>& X_WB =
+      plant.EvalBodyPoseInWorld(plant_context, spatula_body);
+  sample.position_W = X_WB.translation();
+  sample.quaternion_WB = X_WB.rotation().ToQuaternion();
+  sample.left_finger_position = left_joint.get_translation(plant_context);
+  sample.right_finger_position = right_joint.get_translation(plant_context);
+
+  const RigidTransform<double> X_WH = X_WB * X_BH;
+  const Eigen::Vector3d p_WH_W = X_WH.translation();
+  const Eigen::Vector3d handle_axis_W =
+      X_WH.rotation().matrix() * Eigen::Vector3d::UnitZ();
+  const auto& contact_results =
+      plant.get_contact_results_output_port()
+          .Eval<multibody::ContactResults<double>>(plant_context);
+  if (contact_results.num_point_pair_contacts() != 0) {
+    throw std::runtime_error(
+        "Trajectory recording encountered point-contact fallback");
+  }
+  bool left_seen = false;
+  bool right_seen = false;
+  for (int i = 0; i < contact_results.num_hydroelastic_contacts(); ++i) {
+    const auto& contact = contact_results.hydroelastic_contact_info(i);
+    const auto& surface = contact.contact_surface();
+    if (surface.is_triangle()) {
+      throw std::runtime_error(
+          "Trajectory recording requires polygon contact surfaces");
+    }
+
+    const bool spatula_is_M = surface.id_M() == geometry_ids.spatula;
+    const bool spatula_is_N = surface.id_N() == geometry_ids.spatula;
+    if (!spatula_is_M && !spatula_is_N) {
+      const bool is_finger_pair =
+          (surface.id_M() == geometry_ids.left_finger &&
+           surface.id_N() == geometry_ids.right_finger) ||
+          (surface.id_M() == geometry_ids.right_finger &&
+           surface.id_N() == geometry_ids.left_finger);
+      if (is_finger_pair) {
+        continue;
+      }
+      throw std::runtime_error(
+          "At t=" + std::to_string(sample.time) +
+          ", hydroelastic contact between '" +
+          scene_graph.model_inspector().GetName(surface.id_M()) + "' and '" +
+          scene_graph.model_inspector().GetName(surface.id_N()) +
+          "' is not part of the expected spatula or finger-finger contacts");
+    }
+    if (spatula_is_M && spatula_is_N) {
+      throw std::runtime_error(
+          "Hydroelastic contact contains the spatula geometry twice");
+    }
+    ++sample.spatula_contacts;
+    const geometry::GeometryId finger_id =
+        spatula_is_M ? surface.id_N() : surface.id_M();
+    bool* seen = nullptr;
+    Eigen::Vector3d* contact_force_W = nullptr;
+    double* handle_axis_torque = nullptr;
+    if (finger_id == geometry_ids.left_finger) {
+      seen = &left_seen;
+      contact_force_W = &sample.left_contact_force_W;
+      handle_axis_torque = &sample.left_handle_axis_torque;
+    } else if (finger_id == geometry_ids.right_finger) {
+      seen = &right_seen;
+      contact_force_W = &sample.right_contact_force_W;
+      handle_axis_torque = &sample.right_handle_axis_torque;
+    } else {
+      throw std::runtime_error(
+          "At t=" + std::to_string(sample.time) +
+          ", the spatula contacts unexpected geometry '" +
+          scene_graph.model_inspector().GetName(finger_id) + "'");
+    }
+    if (*seen) {
+      throw std::runtime_error(
+          "At t=" + std::to_string(sample.time) +
+          ", trajectory recording encountered a duplicate finger contact");
+    }
+    *seen = true;
+
+    if (!surface.centroid().allFinite() ||
+        !contact.F_Ac_W().get_coeffs().allFinite()) {
+      throw std::runtime_error(
+          "Hydroelastic contact contains non-finite surface or wrench data");
+    }
+    const multibody::SpatialForce<double> F_Sc_W =
+        spatula_is_M ? contact.F_Ac_W() : -contact.F_Ac_W();
+    const multibody::SpatialForce<double> F_Sh_W =
+        F_Sc_W.Shift(p_WH_W - surface.centroid());
+    *contact_force_W = F_Sh_W.translational();
+    *handle_axis_torque = F_Sh_W.rotational().dot(handle_axis_W);
+  }
+
+  if (!sample.position_W.allFinite() ||
+      !sample.quaternion_WB.coeffs().allFinite() ||
+      !std::isfinite(sample.left_finger_position) ||
+      !std::isfinite(sample.right_finger_position) ||
+      !sample.left_contact_force_W.allFinite() ||
+      !std::isfinite(sample.left_handle_axis_torque) ||
+      !sample.right_contact_force_W.allFinite() ||
+      !std::isfinite(sample.right_handle_axis_torque)) {
+    throw std::runtime_error(
+        "Trajectory recording produced a non-finite sample");
+  }
+  return sample;
+}
+
+void WriteTrajectoryCsv(const std::vector<TrajectorySample>& samples,
+                        const std::string& path) {
+  const std::filesystem::path output_path(path);
+  if (!output_path.parent_path().empty()) {
+    std::filesystem::create_directories(output_path.parent_path());
+  }
+  std::ofstream output(output_path);
+  if (!output) {
+    throw std::runtime_error("Cannot open trajectory CSV '" + path + "'");
+  }
+  output << std::setprecision(std::numeric_limits<double>::max_digits10);
+  output << "representation,time_s,x_m,y_m,z_m,qw,qx,qy,qz,"
+            "left_finger_m,right_finger_m,spatula_contacts,"
+            "left_contact_force_x_N,left_contact_force_y_N,"
+            "left_contact_force_z_N,left_handle_axis_torque_Nm,"
+            "right_contact_force_x_N,right_contact_force_y_N,"
+            "right_contact_force_z_N,right_handle_axis_torque_Nm\n";
+  for (const TrajectorySample& sample : samples) {
+    const Eigen::Quaterniond& q = sample.quaternion_WB;
+    output << FLAGS_hydroelastic_representation << "," << sample.time << ","
+           << sample.position_W.x() << "," << sample.position_W.y() << ","
+           << sample.position_W.z() << "," << q.w() << "," << q.x() << ","
+           << q.y() << "," << q.z() << "," << sample.left_finger_position << ","
+           << sample.right_finger_position << "," << sample.spatula_contacts
+           << "," << sample.left_contact_force_W.x() << ","
+           << sample.left_contact_force_W.y() << ","
+           << sample.left_contact_force_W.z() << ","
+           << sample.left_handle_axis_torque << ","
+           << sample.right_contact_force_W.x() << ","
+           << sample.right_contact_force_W.y() << ","
+           << sample.right_contact_force_W.z() << ","
+           << sample.right_handle_axis_torque << "\n";
+  }
+  if (!output) {
+    throw std::runtime_error("Failed while writing trajectory CSV '" + path +
+                             "'");
   }
 }
 
@@ -273,11 +503,60 @@ int DoMain() {
         "--hydroelastic_representation=voxel_sdf requires "
         "--contact_surface_representation=polygon");
   }
+  if (!(FLAGS_tet_resolution_hint_scale > 0.0 &&
+        std::isfinite(FLAGS_tet_resolution_hint_scale))) {
+    throw std::logic_error(
+        "--tet_resolution_hint_scale must be finite and positive");
+  }
+  if (FLAGS_hydroelastic_representation != "tet" &&
+      FLAGS_tet_resolution_hint_scale != 1.0) {
+    throw std::logic_error(
+        "--tet_resolution_hint_scale requires "
+        "--hydroelastic_representation=tet");
+  }
+  if (!(FLAGS_voxel_sdf_width_scale > 0.0 &&
+        std::isfinite(FLAGS_voxel_sdf_width_scale))) {
+    throw std::logic_error(
+        "--voxel_sdf_width_scale must be finite and positive");
+  }
+  if (FLAGS_hydroelastic_representation != "voxel_sdf" &&
+      FLAGS_voxel_sdf_width_scale != 1.0) {
+    throw std::logic_error(
+        "--voxel_sdf_width_scale requires "
+        "--hydroelastic_representation=voxel_sdf");
+  }
   if (FLAGS_validate_voxel_sdf_contacts &&
       FLAGS_hydroelastic_representation != "voxel_sdf") {
     throw std::logic_error(
         "--validate_voxel_sdf_contacts requires "
         "--hydroelastic_representation=voxel_sdf");
+  }
+  if (!FLAGS_trajectory_csv.empty() &&
+      FLAGS_mbp_discrete_update_period <= 0.0) {
+    throw std::logic_error(
+        "--trajectory_csv requires a positive "
+        "--mbp_discrete_update_period");
+  }
+  if (FLAGS_simulation_sec < 0.0) {
+    throw std::logic_error("--simulation_sec must be non-negative");
+  }
+  if (FLAGS_report_simulation_timing) {
+    if (FLAGS_realtime_rate != 0.0) {
+      throw std::logic_error(
+          "--report_simulation_timing requires --realtime_rate=0");
+    }
+    if (FLAGS_visualize) {
+      throw std::logic_error(
+          "--report_simulation_timing requires --visualize=false");
+    }
+    if (!FLAGS_trajectory_csv.empty()) {
+      throw std::logic_error(
+          "--report_simulation_timing requires an empty --trajectory_csv");
+    }
+    if (FLAGS_simulation_sec <= 0.0) {
+      throw std::logic_error(
+          "--report_simulation_timing requires --simulation_sec>0");
+    }
   }
 
   // Construct a MultibodyPlant and a SceneGraph.
@@ -290,6 +569,7 @@ int DoMain() {
   plant_config.discrete_contact_approximation = FLAGS_contact_approximation;
   plant_config.contact_surface_representation =
       FLAGS_contact_surface_representation;
+  plant_config.use_sampled_output_ports = FLAGS_trajectory_csv.empty();
 
   DRAKE_DEMAND(FLAGS_mbp_discrete_update_period >= 0);
   auto [plant, scene_graph] =
@@ -305,10 +585,20 @@ int DoMain() {
       "spatula.sdf");
   DRAKE_THROW_UNLESS(gripper_instances.size() == 1);
   DRAKE_THROW_UNLESS(spatula_instances.size() == 1);
+  const ContactGeometryIds contact_geometry_ids =
+      FindContactGeometryIds(plant, gripper_instances[0], spatula_instances[0]);
+  const RigidTransform<double> X_BH =
+      scene_graph.model_inspector().GetPoseInFrame(
+          contact_geometry_ids.spatula);
   std::vector<geometry::GeometryId> voxel_geometry_ids;
   if (FLAGS_hydroelastic_representation == "voxel_sdf") {
-    voxel_geometry_ids = SetVoxelSdfCompliantRepresentation(
-        {gripper_instances[0], spatula_instances[0]}, &plant, &scene_graph);
+    voxel_geometry_ids = UpdateCompliantGeometryProperties(
+        {gripper_instances[0], spatula_instances[0]},
+        FLAGS_voxel_sdf_width_scale, true, &plant, &scene_graph);
+  } else if (FLAGS_tet_resolution_hint_scale != 1.0) {
+    UpdateCompliantGeometryProperties(
+        {gripper_instances[0], spatula_instances[0]},
+        FLAGS_tet_resolution_hint_scale, false, &plant, &scene_graph);
   }
   // Pose the gripper and weld it to the world.
   const math::RigidTransform<double> X_WF0 = math::RigidTransform<double>(
@@ -337,13 +627,16 @@ int DoMain() {
   // Connect the output of the adder to the plant's actuation input.
   builder.Connect(adder.get_output_port(0), plant.get_actuation_input_port());
 
-  auto meshcat = std::make_shared<geometry::Meshcat>();
-  visualization::ApplyVisualizationConfig(
-      visualization::VisualizationConfig{
-          .default_proximity_color = geometry::Rgba{1, 0, 0, 0.25},
-          .enable_alpha_sliders = true,
-      },
-      &builder, nullptr, nullptr, nullptr, meshcat);
+  std::shared_ptr<geometry::Meshcat> meshcat;
+  if (FLAGS_visualize) {
+    meshcat = std::make_shared<geometry::Meshcat>();
+    visualization::ApplyVisualizationConfig(
+        visualization::VisualizationConfig{
+            .default_proximity_color = geometry::Rgba{1, 0, 0, 0.25},
+            .enable_alpha_sliders = true,
+        },
+        &builder, nullptr, nullptr, nullptr, meshcat);
+  }
 
   // Construct a simulator.
   std::unique_ptr<systems::Diagram<double>> diagram = builder.Build();
@@ -379,8 +672,52 @@ int DoMain() {
 
   // Simulate.
   simulator.Initialize();
-  meshcat->StartRecording();
-  simulator.AdvanceTo(FLAGS_simulation_sec);
+  if (meshcat != nullptr) {
+    meshcat->StartRecording();
+  }
+  std::vector<TrajectorySample> trajectory;
+  if (FLAGS_trajectory_csv.empty()) {
+    if (FLAGS_report_simulation_timing) {
+      // Initialize() resets these statistics before it processes initialization
+      // events. Reset once more here so the timer covers AdvanceTo() only.
+      simulator.ResetStatistics();
+    }
+    const double initial_simulation_time = simulator.get_context().get_time();
+    simulator.AdvanceTo(FLAGS_simulation_sec);
+    if (FLAGS_report_simulation_timing) {
+      const double simulated_seconds =
+          simulator.get_context().get_time() - initial_simulation_time;
+      const double realtime_factor = simulator.get_actual_realtime_rate();
+      const double wall_seconds = simulated_seconds / realtime_factor;
+      std::cout << std::setprecision(17)
+                << "simulation_time_s: " << simulated_seconds << "\n"
+                << "simulation_wall_time_s: " << wall_seconds << "\n"
+                << "simulation_rtf: " << realtime_factor << "\n"
+                << "simulation_steps: " << simulator.get_num_steps_taken()
+                << "\n"
+                << "simulation_discrete_updates: "
+                << simulator.get_num_discrete_updates() << "\n"
+                << "simulation_unrestricted_updates: "
+                << simulator.get_num_unrestricted_updates() << "\n";
+    }
+  } else {
+    trajectory.push_back(MakeTrajectorySample(
+        plant, scene_graph, plant_context, base_link, left_joint, right_joint,
+        contact_geometry_ids, X_BH));
+    const double time_tolerance = 1.0e-12 * std::max(1.0, FLAGS_simulation_sec);
+    while (FLAGS_simulation_sec - simulator.get_context().get_time() >
+           time_tolerance) {
+      const double next_time = std::min(
+          simulator.get_context().get_time() + FLAGS_mbp_discrete_update_period,
+          FLAGS_simulation_sec);
+      simulator.AdvanceTo(next_time);
+      trajectory.push_back(MakeTrajectorySample(
+          plant, scene_graph, plant_context, base_link, left_joint, right_joint,
+          contact_geometry_ids, X_BH));
+    }
+    WriteTrajectoryCsv(trajectory, FLAGS_trajectory_csv);
+    std::cout << "trajectory_csv: " << FLAGS_trajectory_csv << "\n";
+  }
   if (FLAGS_validate_voxel_sdf_contacts) {
     ValidateVoxelSdfContactResults(plant, plant_context, voxel_geometry_ids);
     if (!plant.GetPositionsAndVelocities(plant_context).allFinite()) {
@@ -388,19 +725,21 @@ int DoMain() {
           "Voxel-SDF simulation produced a non-finite plant state");
     }
   }
-  meshcat->StopRecording();
+  if (meshcat != nullptr) {
+    meshcat->StopRecording();
 
-  // TODO(#19142) According to issue 19142, we can playback contact forces and
-  //  torques; however, contact surfaces are not recorded properly.
-  //  For now, we delete contact surfaces to prevent confusion in the playback.
-  //  Remove deletion when 19142 is resolved.
-  meshcat->Delete(
-      "/drake/contact_forces/hydroelastic/"
-      "left_finger_bubble+spatula/contact_surface");
-  meshcat->Delete(
-      "/drake/contact_forces/hydroelastic/"
-      "right_finger_bubble+spatula/contact_surface");
-  meshcat->PublishRecording();
+    // TODO(#19142) According to issue 19142, we can playback contact forces
+    // and torques; however, contact surfaces are not recorded properly.
+    // For now, we delete contact surfaces to prevent confusion in the
+    // playback. Remove deletion when 19142 is resolved.
+    meshcat->Delete(
+        "/drake/contact_forces/hydroelastic/"
+        "left_finger_bubble+spatula/contact_surface");
+    meshcat->Delete(
+        "/drake/contact_forces/hydroelastic/"
+        "right_finger_bubble+spatula/contact_surface");
+    meshcat->PublishRecording();
+  }
 
   systems::PrintSimulatorStatistics(simulator);
   return 0;
