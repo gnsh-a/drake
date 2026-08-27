@@ -81,6 +81,54 @@ drake_py_experiment_binary(
 )
 
 drake_cc_googlebench_binary(
+    name = "voxel_sdf_extraction_timing_benchmark",
+    srcs = ["voxel_sdf_extraction_timing_benchmark.cc"],
+    deps = [
+        "//common:essential",
+        "//geometry:geometry_ids",
+        "//geometry:shape_specification",
+        "//geometry/proximity:contact_surface_utility",
+        "//geometry/proximity:field_intersection",
+        "//geometry/proximity:hydroelastic_internal",
+        "//geometry/proximity:make_sphere_field",
+        "//geometry/proximity:make_sphere_mesh",
+        "//geometry/proximity:marching_cubes_table",
+        "//geometry/proximity:voxel_sdf_contact_common",
+        "//geometry/proximity:voxel_sdf_geometry",
+        "//geometry/proximity:voxel_sdf_marching_cubes_contact",
+        "//geometry/proximity:voxel_sdf_polygon_contact",
+        "//geometry/query_results:contact_surface",
+        "//math",
+        "//tools/performance:gflags_main",
+    ],
+    add_test_rule = True,
+    test_rule_timeout = "moderate",
+)
+
+drake_cc_googlebench_binary(
+    name = "voxel_sdf_local_kernel_benchmark",
+    srcs = ["voxel_sdf_local_kernel_benchmark.cc"],
+    deps = [
+        "//common:essential",
+        "//geometry:shape_specification",
+        "//geometry/proximity:contact_surface_utility",
+        "//geometry/proximity:field_intersection",
+        "//geometry/proximity:hydroelastic_internal",
+        "//geometry/proximity:make_sphere_field",
+        "//geometry/proximity:make_sphere_mesh",
+        "//geometry/proximity:marching_cubes_table",
+        "//geometry/proximity:voxel_sdf_contact_common",
+        "//geometry/proximity:voxel_sdf_geometry",
+        "//geometry/proximity:voxel_sdf_marching_cubes_contact",
+        "//geometry/proximity:voxel_sdf_polygon_contact",
+        "//math",
+        "//tools/performance:gflags_main",
+    ],
+    add_test_rule = True,
+    test_rule_timeout = "moderate",
+)
+
+drake_cc_googlebench_binary(
     name = "render_benchmark",
     srcs = ["render_benchmark.cc"],
     deps = [

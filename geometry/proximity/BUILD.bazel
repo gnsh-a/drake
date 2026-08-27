@@ -496,7 +496,7 @@ drake_cc_library(
     srcs = ["marching_cubes_table.cc"],
     hdrs = ["marching_cubes_table.h"],
     internal = True,
-    visibility = ["//visibility:private"],
+    visibility = ["//geometry/benchmarking:__pkg__"],
 )
 
 drake_cc_library(
@@ -506,6 +506,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":contact_surface_utility",
@@ -524,6 +525,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":contact_surface_utility",
@@ -544,6 +546,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":contact_surface_utility",
@@ -565,6 +568,7 @@ drake_cc_library(
     internal = True,
     visibility = [
         "//geometry:__pkg__",
+        "//geometry/benchmarking:__pkg__",
     ],
     deps = [
         ":voxel_sdf_shape",
